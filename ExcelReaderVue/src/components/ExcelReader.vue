@@ -120,9 +120,14 @@
 
       <div class="json-section">
         <h3>JSON 資料：</h3>
-        <button @click="toggleJsonView" class="toggle-btn">
-          {{ showJson ? '隱藏' : '顯示' }} JSON
-        </button>
+        <div class="json-controls">
+          <button @click="toggleJsonView" class="toggle-btn">
+            {{ showJson ? '隱藏' : '顯示' }} JSON
+          </button>
+          <button @click="downloadJson" class="download-json-btn" :disabled="!excelData">
+            下載 JSON
+          </button>
+        </div>
         <pre v-if="showJson" class="json-display">{{ JSON.stringify(excelData, null, 2) }}</pre>
       </div>
     </div>
@@ -234,6 +239,46 @@ const loadSampleData = async () => {
 
 const toggleJsonView = () => {
   showJson.value = !showJson.value
+}
+
+const downloadJson = () => {
+  if (!excelData.value) {
+    message.value = '沒有可下載的資料'
+    messageType.value = 'error'
+    clearMessage()
+    return
+  }
+
+  try {
+    // 創建JSON字符串
+    const jsonString = JSON.stringify(excelData.value, null, 2)
+    const blob = new Blob([jsonString], { type: 'application/json' })
+    const url = window.URL.createObjectURL(blob)
+    
+    // 創建下載連結
+    const link = document.createElement('a')
+    link.href = url
+    
+    // 生成檔案名稱，使用Excel檔案名稱作為基礎
+    const fileName = excelData.value.fileName ? 
+      `${excelData.value.fileName.replace(/\.[^/.]+$/, '')}.json` : 
+      'excel-data.json'
+    
+    link.setAttribute('download', fileName)
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+
+    message.value = 'JSON檔案已下載'
+    messageType.value = 'success'
+    clearMessage()
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : '未知錯誤'
+    message.value = `下載失敗：${errorMessage}`
+    messageType.value = 'error'
+    clearMessage()
+  }
 }
 
 const downloadSampleFile = async () => {
@@ -782,6 +827,32 @@ h1 {
 
 .toggle-btn:hover {
   background-color: #545b62;
+}
+
+.json-controls {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+}
+
+.download-json-btn {
+  background-color: #28a745;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.download-json-btn:hover:not(:disabled) {
+  background-color: #218838;
+}
+
+.download-json-btn:disabled {
+  background-color: #6c757d;
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .json-display {
