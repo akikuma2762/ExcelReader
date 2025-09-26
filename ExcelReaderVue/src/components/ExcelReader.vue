@@ -56,14 +56,18 @@
                 <th
                   v-if="shouldRenderCell(header)"
                   :style="getHeaderStyle(header)"
-                  :colspan="header.colSpan || 1"
-                  :rowspan="header.rowSpan || 1"
+                  :colspan="header.dimensions?.colSpan || 1"
+                  :rowspan="header.dimensions?.rowSpan || 1"
                 >
-                  <span v-if="header.isRichText" v-html="renderRichText(header)"></span>
+                  <span v-if="header.metadata?.isRichText" v-html="renderRichText(header)"></span>
                   <span v-else v-html="formatTextWithLineBreaks(getDisplayValue(header))"></span>
                   <div class="format-info" v-if="showFormatInfo">
-                    <small>格式: {{ header.formatCode || '一般' }}</small>
-                    <small v-if="header.isRichText" style="color: orange;">Rich Text</small>
+                    <small>格式: {{ header.numberFormat || '一般' }}</small>
+                    <small v-if="header.metadata?.isRichText" style="color: orange;">Rich Text</small>
+                  </div>
+                  <div class="position-info" v-if="showPositionInfo">
+                    <small>位置: {{ header.position?.address || '未知' }}</small>
+                    <small v-if="header.formula">公式: {{ header.formula }}</small>
                   </div>
                 </th>
               </template>
@@ -77,11 +81,17 @@
                   :class="getCellClass(cell)"
                   :style="getCellStyle(cell)"
                   :title="getCellTooltip(cell)"
-                  :colspan="cell.colSpan || 1"
-                  :rowspan="cell.rowSpan || 1"
+                  :colspan="cell.dimensions?.colSpan || 1"
+                  :rowspan="cell.dimensions?.rowSpan || 1"
                 >
-                  <span v-if="cell.isRichText" v-html="renderRichText(cell)"></span>
-                  <span v-else v-html="formatTextWithLineBreaks(getDisplayValue(cell))"></span>
+                  <div class="cell-content">
+                    <span v-if="cell.metadata?.isRichText" v-html="renderRichText(cell)"></span>
+                    <span v-else v-html="formatTextWithLineBreaks(getDisplayValue(cell))"></span>
+                    <div class="position-info" v-if="showPositionInfo && (cell.position?.address || cell.formula)">
+                      <small v-if="cell.position?.address">{{ cell.position.address }}</small>
+                      <small v-if="cell.formula" style="color: green;">{{ cell.formula }}</small>
+                    </div>
+                  </div>
                 </td>
               </template>
             </tr>
@@ -97,6 +107,14 @@
         <label>
           <input type="checkbox" v-model="showOriginalValue" />
           顯示原始值
+        </label>
+        <label>
+          <input type="checkbox" v-model="showAdvancedFormatting" />
+          顯示進階格式 (邊框、對齊等)
+        </label>
+        <label>
+          <input type="checkbox" v-model="showPositionInfo" />
+          顯示位置資訊
         </label>
       </div>
 
@@ -114,52 +132,14 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import axios from 'axios'
+import type {
+  ExcelCellInfo,
+  ExcelData,
+  UploadResponse,
+  RichTextPart
+} from '@/types'
 
-interface RichTextPart {
-  text: string
-  fontBold?: boolean
-  fontItalic?: boolean
-  fontUnderline?: boolean
-  fontSize?: number
-  fontName?: string
-  fontColor?: string
-}
 
-interface ExcelCellInfo {
-  value: string | number | boolean | Date | null
-  displayText: string
-  formatCode: string
-  dataType: string
-  fontBold?: boolean
-  fontSize?: number
-  fontName?: string
-  backgroundColor?: string
-  fontColor?: string
-  textAlign?: string
-  columnWidth?: number
-  richText?: RichTextPart[]
-  isRichText?: boolean
-  rowSpan?: number
-  colSpan?: number
-  isMerged?: boolean
-  isMainMergedCell?: boolean
-}
-
-interface ExcelData {
-  headers: ExcelCellInfo[][]
-  rows: ExcelCellInfo[][]
-  totalRows: number
-  totalColumns: number
-  fileName: string
-  worksheetName: string
-  availableWorksheets: string[]
-}
-
-interface UploadResponse {
-  success: boolean
-  message: string
-  data?: ExcelData
-}
 
 const loading = ref<boolean>(false)
 const message = ref<string>('')
@@ -169,6 +149,8 @@ const showJson = ref<boolean>(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const showFormatInfo = ref<boolean>(false)
 const showOriginalValue = ref<boolean>(false)
+const showAdvancedFormatting = ref<boolean>(false)
+const showPositionInfo = ref<boolean>(false)
 
 const API_BASE_URL = 'http://localhost:5280/api' // API伺服器URL
 
@@ -284,14 +266,14 @@ const getDisplayValue = (cell: ExcelCellInfo): string => {
   if (showOriginalValue.value) {
     return cell.value?.toString() || ''
   }
-  return cell.displayText || ''
+  return cell.text || ''
 }
 
 // 新增：渲染Rich Text的HTML
 const renderRichText = (cell: ExcelCellInfo): string => {
-  if (!cell.isRichText || !cell.richText) {
+  if (!cell.metadata?.isRichText || !cell.richText) {
     // 處理一般文字的換行
-    return formatTextWithLineBreaks(cell.displayText || '')
+    return formatTextWithLineBreaks(cell.text || '')
   }
 
   return cell.richText.map((part: RichTextPart) => {
@@ -299,12 +281,12 @@ const renderRichText = (cell: ExcelCellInfo): string => {
     let html = formatTextWithLineBreaks(escapeHtml(part.text))
     const styles: string[] = []
 
-    if (part.fontBold) styles.push('font-weight: bold')
-    if (part.fontItalic) styles.push('font-style: italic')
-    if (part.fontUnderline) styles.push('text-decoration: underline')
-    if (part.fontSize && part.fontSize > 0) styles.push(`font-size: ${part.fontSize}pt`)
+    if (part.bold) styles.push('font-weight: bold')
+    if (part.italic) styles.push('font-style: italic')
+    if (part.underLine) styles.push('text-decoration: underline')
+    if (part.size && part.size > 0) styles.push(`font-size: ${part.size}pt`)
     if (part.fontName && part.fontName.trim()) styles.push(`font-family: ${part.fontName}`)
-    if (part.fontColor) styles.push(`color: ${part.fontColor}`)
+    if (part.color) styles.push(`color: ${part.color}`)
 
     if (styles.length > 0) {
       html = `<span style="${styles.join('; ')}">${html}</span>`
@@ -333,35 +315,108 @@ const convertExcelWidthToPixels = (excelWidth: number): number => {
   return Math.round(excelWidth * 7.5)
 }
 
+// 將Excel邊框樣式轉換為CSS邊框樣式
+const convertBorderStyle = (excelStyle?: string): string => {
+  if (!excelStyle || excelStyle === 'None') return 'none'
+
+  const styleMap: Record<string, string> = {
+    'Thin': '1px solid',
+    'Thick': '3px solid',
+    'Medium': '2px solid',
+    'Dotted': '1px dotted',
+    'Dashed': '1px dashed',
+    'Double': '3px double',
+    'Hair': '1px solid'
+  }
+
+  return styleMap[excelStyle] || '1px solid'
+}
+
+// 獲取儲存格的邊框樣式
+const getCellBorderStyle = (cell: ExcelCellInfo): Record<string, string> => {
+  const borderStyles: Record<string, string> = {}
+
+  if (cell.border?.top?.style && cell.border.top.style !== 'None') {
+    const color = cell.border.top.color ? `#${cell.border.top.color}` : '#000000'
+    borderStyles.borderTop = `${convertBorderStyle(cell.border.top.style)} ${color}`
+  }
+
+  if (cell.border?.bottom?.style && cell.border.bottom.style !== 'None') {
+    const color = cell.border.bottom.color ? `#${cell.border.bottom.color}` : '#000000'
+    borderStyles.borderBottom = `${convertBorderStyle(cell.border.bottom.style)} ${color}`
+  }
+
+  if (cell.border?.left?.style && cell.border.left.style !== 'None') {
+    const color = cell.border.left.color ? `#${cell.border.left.color}` : '#000000'
+    borderStyles.borderLeft = `${convertBorderStyle(cell.border.left.style)} ${color}`
+  }
+
+  if (cell.border?.right?.style && cell.border.right.style !== 'None') {
+    const color = cell.border.right.color ? `#${cell.border.right.color}` : '#000000'
+    borderStyles.borderRight = `${convertBorderStyle(cell.border.right.style)} ${color}`
+  }
+
+  return borderStyles
+}
+
 const getHeaderStyle = (header: ExcelCellInfo) => {
   const style: Record<string, string> = {}
 
-  if (header.fontBold) {
+  // 字體樣式
+  if (header.font?.bold) {
     style.fontWeight = 'bold'
   }
 
-  if (header.fontSize) {
-    style.fontSize = `${header.fontSize}px`
+  if (header.font?.italic) {
+    style.fontStyle = 'italic'
   }
 
-  if (header.fontName) {
-    style.fontFamily = `"${header.fontName}"`
+  if (header.font?.size) {
+    style.fontSize = `${header.font.size}px`
   }
 
-  if (header.backgroundColor) {
-    style.backgroundColor = `#${header.backgroundColor}`
+  if (header.font?.name) {
+    style.fontFamily = `"${header.font.name}"`
   }
 
-  if (header.fontColor) {
-    style.color = `#${header.fontColor}`
+  if (header.font?.strike) {
+    style.textDecoration = 'line-through'
   }
 
-  if (header.textAlign) {
-    style.textAlign = header.textAlign
+  // 顏色樣式
+  if (header.fill?.backgroundColor) {
+    style.backgroundColor = `#${header.fill.backgroundColor}`
   }
 
-  if (header.columnWidth) {
-    style.width = `${convertExcelWidthToPixels(header.columnWidth)}px`
+  if (header.font?.color) {
+    style.color = `#${header.font.color}`
+  }
+
+  // 對齊樣式
+  if (header.alignment?.horizontal) {
+    style.textAlign = header.alignment.horizontal.toLowerCase()
+  }
+
+  if (header.alignment?.vertical) {
+    style.verticalAlign = header.alignment.vertical.toLowerCase()
+  }
+
+  if (header.alignment?.wrapText) {
+    style.whiteSpace = 'pre-wrap'
+  }
+
+  // 尺寸
+  if (header.dimensions?.columnWidth) {
+    style.width = `${convertExcelWidthToPixels(header.dimensions.columnWidth)}px`
+  }
+
+  if (header.dimensions?.rowHeight) {
+    style.height = `${header.dimensions.rowHeight}px`
+  }
+
+  // 邊框樣式 (僅在顯示進階格式時應用)
+  if (showAdvancedFormatting.value) {
+    Object.assign(style, getCellBorderStyle(header))
   }
 
   return style
@@ -394,32 +449,61 @@ const getCellClass = (cell: ExcelCellInfo): string => {
 const getCellStyle = (cell: ExcelCellInfo) => {
   const style: Record<string, string> = {}
 
-  if (cell.fontBold) {
+  // 字體樣式
+  if (cell.font?.bold) {
     style.fontWeight = 'bold'
   }
 
-  if (cell.fontSize) {
-    style.fontSize = `${cell.fontSize}px`
+  if (cell.font?.italic) {
+    style.fontStyle = 'italic'
   }
 
-  if (cell.fontName) {
-    style.fontFamily = `"${cell.fontName}"`
+  if (cell.font?.size) {
+    style.fontSize = `${cell.font.size}px`
   }
 
-  if (cell.backgroundColor) {
-    style.backgroundColor = `#${cell.backgroundColor}`
+  if (cell.font?.name) {
+    style.fontFamily = `"${cell.font.name}"`
   }
 
-  if (cell.fontColor) {
-    style.color = `#${cell.fontColor}`
+  if (cell.font?.strike) {
+    style.textDecoration = 'line-through'
   }
 
-  if (cell.textAlign) {
-    style.textAlign = cell.textAlign
+  // 顏色樣式
+  if (cell.fill?.backgroundColor) {
+    style.backgroundColor = `#${cell.fill.backgroundColor}`
   }
 
-  if (cell.columnWidth) {
-    style.width = `${convertExcelWidthToPixels(cell.columnWidth)}px`
+  if (cell.font?.color) {
+    style.color = `#${cell.font.color}`
+  }
+
+  // 對齊樣式
+  if (cell.alignment?.horizontal) {
+    style.textAlign = cell.alignment.horizontal.toLowerCase()
+  }
+
+  if (cell.alignment?.vertical) {
+    style.verticalAlign = cell.alignment.vertical.toLowerCase()
+  }
+
+  if (cell.alignment?.wrapText) {
+    style.whiteSpace = 'pre-wrap'
+  }
+
+  // 尺寸
+  if (cell.dimensions?.columnWidth) {
+    style.width = `${convertExcelWidthToPixels(cell.dimensions.columnWidth)}px`
+  }
+
+  if (cell.dimensions?.rowHeight) {
+    style.height = `${cell.dimensions.rowHeight}px`
+  }
+
+  // 邊框樣式 (僅在顯示進階格式時應用)
+  if (showAdvancedFormatting.value) {
+    Object.assign(style, getCellBorderStyle(cell))
   }
 
   return style
@@ -428,26 +512,87 @@ const getCellStyle = (cell: ExcelCellInfo) => {
 const getCellTooltip = (cell: ExcelCellInfo): string => {
   const parts = []
 
+  // 基本資訊
+  parts.push(`位置: ${cell.position?.address || '未知'}`)
   parts.push(`類型: ${cell.dataType}`)
+  parts.push(`值類型: ${cell.valueType || '未知'}`)
 
-  if (cell.formatCode) {
-    parts.push(`格式: ${cell.formatCode}`)
+  // 格式資訊
+  if (cell.numberFormat) {
+    parts.push(`數字格式: ${cell.numberFormat}`)
   }
 
+  if (cell.numberFormatId) {
+    parts.push(`格式ID: ${cell.numberFormatId}`)
+  }
+
+  // 值資訊
   if (cell.value !== null && cell.value !== undefined) {
     parts.push(`原始值: ${cell.value}`)
   }
 
-  if (cell.displayText) {
-    parts.push(`顯示文字: ${cell.displayText}`)
+  if (cell.text) {
+    parts.push(`顯示文字: ${cell.text}`)
   }
 
-  if (cell.isRichText && cell.richText) {
+  if (cell.formula) {
+    parts.push(`公式: ${cell.formula}`)
+  }
+
+  // 字體資訊
+  if (cell.font?.name || cell.font?.size) {
+    const fontInfo = []
+    if (cell.font.name) fontInfo.push(`字體: ${cell.font.name}`)
+    if (cell.font.size) fontInfo.push(`大小: ${cell.font.size}pt`)
+    if (cell.font.bold) fontInfo.push('粗體')
+    if (cell.font.italic) fontInfo.push('斜體')
+    if (fontInfo.length > 0) parts.push(fontInfo.join(', '))
+  }
+
+  // 對齊資訊
+  if (cell.alignment?.horizontal || cell.alignment?.vertical) {
+    const alignInfo = []
+    if (cell.alignment.horizontal) alignInfo.push(`水平: ${cell.alignment.horizontal}`)
+    if (cell.alignment.vertical) alignInfo.push(`垂直: ${cell.alignment.vertical}`)
+    if (cell.alignment.wrapText) alignInfo.push('自動換行')
+    if (alignInfo.length > 0) parts.push(`對齊: ${alignInfo.join(', ')}`)
+  }
+
+  // Rich Text 資訊
+  if (cell.metadata?.isRichText && cell.richText) {
     parts.push(`Rich Text 片段數: ${cell.richText.length}`)
   }
 
-  if (cell.isMerged && cell.rowSpan && cell.colSpan) {
-    parts.push(`合併儲存格: ${cell.rowSpan}行 x ${cell.colSpan}欄`)
+  // 合併儲存格資訊
+  if (cell.dimensions?.isMerged && cell.dimensions?.rowSpan && cell.dimensions?.colSpan) {
+    parts.push(`合併儲存格: ${cell.dimensions.rowSpan}行 x ${cell.dimensions.colSpan}欄`)
+  }
+
+  // 尺寸資訊
+  if (cell.dimensions?.columnWidth || cell.dimensions?.rowHeight) {
+    const sizeInfo = []
+    if (cell.dimensions.columnWidth) sizeInfo.push(`欄寬: ${cell.dimensions.columnWidth.toFixed(2)}`)
+    if (cell.dimensions.rowHeight) sizeInfo.push(`行高: ${cell.dimensions.rowHeight.toFixed(2)}`)
+    if (sizeInfo.length > 0) parts.push(`尺寸: ${sizeInfo.join(', ')}`)
+  }
+
+  // 註解資訊
+  if (cell.comment) {
+    parts.push(`註解: ${cell.comment.text || '無內容'}`)
+    if (cell.comment.author) parts.push(`註解作者: ${cell.comment.author}`)
+  }
+
+  // 超連結資訊
+  if (cell.hyperlink) {
+    parts.push(`超連結: ${cell.hyperlink.originalString || cell.hyperlink.absoluteUri || '無連結'}`)
+  }
+
+  // 樣式資訊
+  if (cell.metadata?.styleId || cell.metadata?.styleName) {
+    const styleInfo = []
+    if (cell.metadata.styleId) styleInfo.push(`ID: ${cell.metadata.styleId}`)
+    if (cell.metadata.styleName) styleInfo.push(`名稱: ${cell.metadata.styleName}`)
+    if (styleInfo.length > 0) parts.push(`樣式: ${styleInfo.join(', ')}`)
   }
 
   return parts.join('\n')
@@ -455,12 +600,12 @@ const getCellTooltip = (cell: ExcelCellInfo): string => {
 
 const shouldRenderCell = (cell: ExcelCellInfo): boolean => {
   // 如果不是合併儲存格，正常顯示
-  if (!cell.isMerged) {
+  if (!cell.dimensions?.isMerged) {
     return true
   }
-  
+
   // 如果是合併儲存格，只顯示主儲存格
-  return cell.isMainMergedCell === true
+  return cell.dimensions?.isMainMergedCell === true
 }
 </script>
 
@@ -602,7 +747,7 @@ h1 {
 .data-table th,
 .data-table td {
   border: 1px solid #ddd;
-  padding: 12px;
+  padding: 2px;
   text-align: left;
 }
 
@@ -662,6 +807,21 @@ h1 {
 .format-info {
   margin-top: 4px;
   opacity: 0.7;
+}
+
+.position-info {
+  margin-top: 2px;
+  opacity: 0.6;
+  font-size: 10px;
+}
+
+.position-info small {
+  display: block;
+  color: #666;
+}
+
+.cell-content {
+  position: relative;
 }
 
 .format-controls {
