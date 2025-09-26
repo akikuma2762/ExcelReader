@@ -424,22 +424,22 @@ const getCellBorderStyle = (cell: ExcelCellInfo): Record<string, string> => {
 
   if (cell.border?.top?.style && cell.border.top.style !== 'None') {
     const color = cell.border.top.color ? `#${cell.border.top.color}` : '#000000'
-    borderStyles.borderTop = `${convertBorderStyle(cell.border.top.style)} ${color}`
+    borderStyles.borderTop = `${convertBorderStyle(cell.border.top.style)} ${color} !important`
   }
 
   if (cell.border?.bottom?.style && cell.border.bottom.style !== 'None') {
     const color = cell.border.bottom.color ? `#${cell.border.bottom.color}` : '#000000'
-    borderStyles.borderBottom = `${convertBorderStyle(cell.border.bottom.style)} ${color}`
+    borderStyles.borderBottom = `${convertBorderStyle(cell.border.bottom.style)} ${color} !important`
   }
 
   if (cell.border?.left?.style && cell.border.left.style !== 'None') {
     const color = cell.border.left.color ? `#${cell.border.left.color}` : '#000000'
-    borderStyles.borderLeft = `${convertBorderStyle(cell.border.left.style)} ${color}`
+    borderStyles.borderLeft = `${convertBorderStyle(cell.border.left.style)} ${color} !important`
   }
 
   if (cell.border?.right?.style && cell.border.right.style !== 'None') {
     const color = cell.border.right.color ? `#${cell.border.right.color}` : '#000000'
-    borderStyles.borderRight = `${convertBorderStyle(cell.border.right.style)} ${color}`
+    borderStyles.borderRight = `${convertBorderStyle(cell.border.right.style)} ${color} !important`
   }
 
   return borderStyles
@@ -500,9 +500,10 @@ const getHeaderStyle = (header: ExcelCellInfo) => {
     style.height = `${header.dimensions.rowHeight}px`
   }
 
-  // 邊框樣式 (僅在顯示進階格式時應用)
-  if (showAdvancedFormatting.value) {
-    Object.assign(style, getCellBorderStyle(header))
+  // 邊框樣式 - 總是套用 Excel 的邊框設定
+  const borderStyles = getCellBorderStyle(header)
+  if (Object.keys(borderStyles).length > 0) {
+    Object.assign(style, borderStyles)
   }
 
   return style
@@ -587,9 +588,10 @@ const getCellStyle = (cell: ExcelCellInfo) => {
     style.height = `${cell.dimensions.rowHeight}px`
   }
 
-  // 邊框樣式 (僅在顯示進階格式時應用)
-  if (showAdvancedFormatting.value) {
-    Object.assign(style, getCellBorderStyle(cell))
+  // 邊框樣式 - 總是套用 Excel 的邊框設定
+  const borderStyles = getCellBorderStyle(cell)
+  if (Object.keys(borderStyles).length > 0) {
+    Object.assign(style, borderStyles)
   }
 
   return style
@@ -858,14 +860,22 @@ h1 {
   border-collapse: collapse;
   min-width: 600px;
   table-layout: fixed ;
+  margin: auto;
 }
 
 .data-table th,
 .data-table td {
+  /* 只設定默認邊框，如果沒有動態邊框的話 */
   border: 1px solid #ddd;
   padding: 2px;
   text-align: left;
   white-space: nowrap;
+}
+
+/* 當有動態邊框時，讓動態邊框優先 */
+.data-table td[style*="border"] {
+  /* 清除默認邊框，讓行內樣式生效 */
+  /* border: none !important; */
 }
 
 .data-table th {
@@ -991,10 +1001,7 @@ h1 {
   color: #007bff;
 }
 
-.cell-number {
-  color: #28a745;
-  text-align: right;
-}
+
 
 .cell-boolean {
   color: #dc3545;

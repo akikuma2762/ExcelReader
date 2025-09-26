@@ -70,15 +70,20 @@ namespace ExcelReaderAPI.Controllers
 
         private ExcelCellInfo CreateCellInfo(ExcelRange cell, ExcelWorksheet worksheet)
         {
+            if (cell == null || worksheet == null)
+                throw new ArgumentNullException("Cell or worksheet cannot be null");
+
             var cellInfo = new ExcelCellInfo();
 
-            // 位置資訊
-            cellInfo.Position = new CellPosition
+            try
             {
-                Row = cell.Start.Row,
-                Column = cell.Start.Column,
-                Address = cell.Address
-            };
+                // 位置資訊
+                cellInfo.Position = new CellPosition
+                {
+                    Row = cell.Start.Row,
+                    Column = cell.Start.Column,
+                    Address = cell.Address ?? $"{GetColumnName(cell.Start.Column)}{cell.Start.Row}"
+                };
 
             // 基本值和顯示
             cellInfo.Value = cell.Value;
@@ -126,7 +131,7 @@ namespace ExcelReaderAPI.Controllers
                 Italic = cell.Style.Font.Italic,
                 UnderLine = cell.Style.Font.UnderLine.ToString(),
                 Strike = cell.Style.Font.Strike,
-                Color = cell.Style.Font.Color.Rgb,
+                Color = GetColorFromExcelColor(cell.Style.Font.Color),
                 ColorTheme = cell.Style.Font.Color.Theme?.ToString(),
                 ColorTint = (double?)cell.Style.Font.Color.Tint,
                 Charset = cell.Style.Font.Charset,
@@ -319,6 +324,26 @@ namespace ExcelReaderAPI.Controllers
             };
 
             return cellInfo;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"讀取儲存格 {cell?.Address ?? "未知位置"} 時發生錯誤");
+                
+                // 返回基本的儲存格資訊，避免整個處理中斷
+                return new ExcelCellInfo
+                {
+                    Position = new CellPosition
+                    {
+                        Row = cell?.Start.Row ?? 0,
+                        Column = cell?.Start.Column ?? 0,
+                        Address = cell?.Address ?? "未知"
+                    },
+                    Value = null,
+                    Text = "",
+                    DataType = "Error",
+                    Font = new FontInfo { Color = "000000" }
+                };
+            }
         }
 
         /// <summary>
@@ -437,12 +462,19 @@ namespace ExcelReaderAPI.Controllers
                 // 處理 ARGB 格式（8位）轉為 RGB 格式（6位）
                 if (colorValue.Length == 8)
                 {
+                    // ARGB 格式：前2位是Alpha，後6位是RGB
                     colorValue = colorValue.Substring(2);
                 }
                 
                 if (colorValue.Length == 6)
                 {
-                    return colorValue;
+                    return colorValue.ToUpperInvariant();
+                }
+                
+                // 處理3位短格式（例如：F00 -> FF0000）
+                if (colorValue.Length == 3)
+                {
+                    return $"{colorValue[0]}{colorValue[0]}{colorValue[1]}{colorValue[1]}{colorValue[2]}{colorValue[2]}";
                 }
             }
 
@@ -1036,7 +1068,7 @@ namespace ExcelReaderAPI.Controllers
                             Italic = cell.Style.Font.Italic,
                             Underline = cell.Style.Font.UnderLine,
                             Strike = cell.Style.Font.Strike,
-                            Color = cell.Style.Font.Color.Rgb,
+                            Color = GetColorFromExcelColor(cell.Style.Font.Color),
                             ColorTheme = cell.Style.Font.Color.Theme?.ToString(),
                             ColorTint = cell.Style.Font.Color.Tint,
                             Charset = cell.Style.Font.Charset,
