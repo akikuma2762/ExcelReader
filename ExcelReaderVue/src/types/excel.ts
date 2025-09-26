@@ -184,8 +184,7 @@ export interface ExcelCellInfo {
   metadata: CellMetadata
 
   // 舊屬性（向後兼容，已棄用）
-  /** @deprecated 請使用 text 屬性 */
-  displayText?: string
+  // displayText 屬性已移除，請使用 text 屬性
   /** @deprecated 請使用 numberFormat 屬性 */
   formatCode?: string
   /** @deprecated 請使用 font.bold 屬性 */
@@ -272,7 +271,7 @@ export interface DebugExcelData {
  */
 export interface SimpleCellInfo {
   value: string | number | boolean | Date | null
-  displayText: string
+  text: string
   formatCode: string
   dataType: string
   fontBold?: boolean

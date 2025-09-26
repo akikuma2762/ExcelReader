@@ -194,12 +194,7 @@ namespace ExcelReaderAPI.Models
         public CellMetadata Metadata { get; set; } = new();
 
         // 舊屬性保持兼容性（標記為過時但仍保留）
-        [Obsolete("請使用 Text 屬性")]
-        public string DisplayText 
-        { 
-            get => Text; 
-            set => Text = value; 
-        }
+        // DisplayText 屬性已移除，請使用 Text 屬性
         
         [Obsolete("請使用 NumberFormat 屬性")]
         public string FormatCode 

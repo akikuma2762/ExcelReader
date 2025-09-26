@@ -64,9 +64,9 @@
           <thead>
             <tr>
               <template v-for="(header, index) in getCurrentHeaders()" :key="index">
-                <!-- Excel 欄位標頭（簡單字串） -->
-                <th v-if="headerType === 'column'" class="column-header">
-                  {{ header }}
+                <!-- Excel 欄位標頭（包含寬度的物件） -->
+                <th v-if="headerType === 'column'" class="column-header" :style="getColumnHeaderStyle(header)">
+                  {{ getColumnHeaderName(header) }}
                 </th>
                 <!-- 工作表內容標頭（ExcelCellInfo 物件） -->
                 <th
@@ -159,6 +159,13 @@ import type {
   UploadResponse,
   RichTextPart
 } from '@/types'
+
+// 欄位標頭類型定義
+interface ColumnHeader {
+  name: string;
+  width: number;
+  index: number;
+}
 
 
 
@@ -271,16 +278,16 @@ const downloadJson = () => {
     const jsonString = JSON.stringify(excelData.value, null, 2)
     const blob = new Blob([jsonString], { type: 'application/json' })
     const url = window.URL.createObjectURL(blob)
-    
+
     // 創建下載連結
     const link = document.createElement('a')
     link.href = url
-    
+
     // 生成檔案名稱，使用Excel檔案名稱作為基礎
-    const fileName = excelData.value.fileName ? 
-      `${excelData.value.fileName.replace(/\.[^/.]+$/, '')}.json` : 
+    const fileName = excelData.value.fileName ?
+      `${excelData.value.fileName.replace(/\.[^/.]+$/, '')}.json` :
       'excel-data.json'
-    
+
     link.setAttribute('download', fileName)
     document.body.appendChild(link)
     link.click()
@@ -305,7 +312,7 @@ const onHeaderTypeChange = () => {
 
 const getCurrentHeaders = () => {
   if (!excelData.value || !excelData.value.headers) return []
-  
+
   if (headerType.value === 'column') {
     // 返回 Excel 欄位標頭 (A, B, C...)
     return excelData.value.headers[0] || []
@@ -686,6 +693,34 @@ const shouldRenderCell = (cell: ExcelCellInfo): boolean => {
   // 如果是合併儲存格，只顯示主儲存格
   return cell.dimensions?.isMainMergedCell === true
 }
+
+// 獲取欄位標頭名稱（處理新的物件格式）
+const getColumnHeaderName = (header: unknown): string => {
+  // 如果是新的物件格式（包含 name, width, index）
+  if (typeof header === 'object' && header !== null && 'name' in header) {
+    return (header as ColumnHeader).name
+  }
+
+  // 如果是舊的字串格式
+  if (typeof header === 'string') {
+    return header
+  }
+
+  return ''
+}
+
+// 獲取欄位標頭樣式（包含寬度）
+const getColumnHeaderStyle = (header: unknown): Record<string, string> => {
+  const style: Record<string, string> = {}
+
+  // 如果是新的物件格式且有寬度資訊
+  if (typeof header === 'object' && header !== null && 'width' in header) {
+    const columnHeader = header as ColumnHeader
+    style.width = `${convertExcelWidthToPixels(columnHeader.width)}px`
+  }
+
+  return style
+}
 </script>
 
 <style scoped>
@@ -818,9 +853,11 @@ h1 {
 }
 
 .data-table {
-  width: 100%;
+  /*excel thead已有固定寬度*/
+  width: 0;
   border-collapse: collapse;
   min-width: 600px;
+  table-layout: fixed ;
 }
 
 .data-table th,
@@ -828,6 +865,7 @@ h1 {
   border: 1px solid #ddd;
   padding: 2px;
   text-align: left;
+  white-space: nowrap;
 }
 
 .data-table th {
