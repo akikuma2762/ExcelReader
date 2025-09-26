@@ -70,73 +70,24 @@ namespace ExcelReaderAPI.Controllers
 
         private ExcelCellInfo CreateCellInfo(ExcelRange cell, ExcelWorksheet worksheet)
         {
-            var cellInfo = new ExcelCellInfo
+            var cellInfo = new ExcelCellInfo();
+
+            // 位置資訊
+            cellInfo.Position = new CellPosition
             {
-                Value = cell.Value,
-                DisplayText = cell.Text,
-                FormatCode = cell.Style.Numberformat.Format,
-                FontBold = cell.Style.Font.Bold,
-                FontSize = cell.Style.Font.Size,
-                FontName = cell.Style.Font.Name,
-                BackgroundColor = cell.Style.Fill.BackgroundColor?.Rgb,
-                FontColor = cell.Style.Font.Color?.Rgb,
-                TextAlign = GetTextAlign(cell.Style.HorizontalAlignment),
-                ColumnWidth = GetColumnWidth(worksheet, cell.Start.Column)
+                Row = cell.Start.Row,
+                Column = cell.Start.Column,
+                Address = cell.Address
             };
 
-            // 檢查是否為合併儲存格
-            if (cell.Merge)
-            {
-                cellInfo.IsMerged = true;
-                
-                // 尋找包含此儲存格的合併範圍
-                var mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
-                if (mergedRange != null)
-                {
-                    // 檢查是否為主儲存格（合併範圍的左上角）
-                    cellInfo.IsMainMergedCell = (cell.Start.Row == mergedRange.Start.Row && 
-                                                cell.Start.Column == mergedRange.Start.Column);
-                    
-                    if (cellInfo.IsMainMergedCell)
-                    {
-                        cellInfo.RowSpan = mergedRange.Rows;
-                        cellInfo.ColSpan = mergedRange.Columns;
-                    }
-                    else
-                    {
-                        cellInfo.RowSpan = 1;
-                        cellInfo.ColSpan = 1;
-                    }
-                }
-                else
-                {
-                    cellInfo.RowSpan = 1;
-                    cellInfo.ColSpan = 1;
-                }
-            }
+            // 基本值和顯示
+            cellInfo.Value = cell.Value;
+            cellInfo.Text = cell.Text;
+            cellInfo.Formula = cell.Formula;
+            cellInfo.FormulaR1C1 = cell.FormulaR1C1;
 
-            // 檢查是否為Rich Text
-            if (cell.IsRichText && cell.RichText != null && cell.RichText.Count > 0)
-            {
-                cellInfo.IsRichText = true;
-                cellInfo.RichText = new List<RichTextPart>();
-                
-                foreach (var richTextPart in cell.RichText)
-                {
-                    cellInfo.RichText.Add(new RichTextPart
-                    {
-                        Text = richTextPart.Text,
-                        FontBold = richTextPart.Bold,
-                        FontItalic = richTextPart.Italic,
-                        FontUnderline = richTextPart.UnderLine,
-                        FontSize = richTextPart.Size,
-                        FontName = richTextPart.FontName,
-                        FontColor = richTextPart.Color.IsEmpty ? null : $"#{richTextPart.Color.R:X2}{richTextPart.Color.G:X2}{richTextPart.Color.B:X2}"
-                    });
-                }
-            }
-
-            // 設定資料類型
+            // 資料類型
+            cellInfo.ValueType = cell.Value?.GetType().Name;
             if (cell.Value == null)
             {
                 cellInfo.DataType = "Empty";
@@ -162,12 +113,198 @@ namespace ExcelReaderAPI.Controllers
                 cellInfo.DataType = "Text";
             }
 
+            // 格式化
+            cellInfo.NumberFormat = cell.Style.Numberformat.Format;
+            cellInfo.NumberFormatId = cell.Style.Numberformat.NumFmtID;
+
+            // 字體樣式
+            cellInfo.Font = new FontInfo
+            {
+                Name = cell.Style.Font.Name,
+                Size = cell.Style.Font.Size,
+                Bold = cell.Style.Font.Bold,
+                Italic = cell.Style.Font.Italic,
+                UnderLine = cell.Style.Font.UnderLine.ToString(),
+                Strike = cell.Style.Font.Strike,
+                Color = cell.Style.Font.Color.Rgb,
+                ColorTheme = cell.Style.Font.Color.Theme?.ToString(),
+                ColorTint = (double?)cell.Style.Font.Color.Tint,
+                Charset = cell.Style.Font.Charset,
+                Scheme = cell.Style.Font.Scheme?.ToString(),
+                Family = cell.Style.Font.Family
+            };
+
+            // 對齊方式
+            cellInfo.Alignment = new AlignmentInfo
+            {
+                Horizontal = cell.Style.HorizontalAlignment.ToString(),
+                Vertical = cell.Style.VerticalAlignment.ToString(),
+                WrapText = cell.Style.WrapText,
+                Indent = cell.Style.Indent,
+                ReadingOrder = cell.Style.ReadingOrder.ToString(),
+                TextRotation = cell.Style.TextRotation,
+                ShrinkToFit = cell.Style.ShrinkToFit
+            };
+
+            // 邊框
+            cellInfo.Border = new BorderInfo
+            {
+                Top = new BorderStyle 
+                { 
+                    Style = cell.Style.Border.Top.Style.ToString(), 
+                    Color = cell.Style.Border.Top.Color.Rgb 
+                },
+                Bottom = new BorderStyle 
+                { 
+                    Style = cell.Style.Border.Bottom.Style.ToString(), 
+                    Color = cell.Style.Border.Bottom.Color.Rgb 
+                },
+                Left = new BorderStyle 
+                { 
+                    Style = cell.Style.Border.Left.Style.ToString(), 
+                    Color = cell.Style.Border.Left.Color.Rgb 
+                },
+                Right = new BorderStyle 
+                { 
+                    Style = cell.Style.Border.Right.Style.ToString(), 
+                    Color = cell.Style.Border.Right.Color.Rgb 
+                },
+                Diagonal = new BorderStyle 
+                { 
+                    Style = cell.Style.Border.Diagonal.Style.ToString(), 
+                    Color = cell.Style.Border.Diagonal.Color.Rgb 
+                },
+                DiagonalUp = cell.Style.Border.DiagonalUp,
+                DiagonalDown = cell.Style.Border.DiagonalDown
+            };
+
+            // 填充/背景
+            cellInfo.Fill = new FillInfo
+            {
+                PatternType = cell.Style.Fill.PatternType.ToString(),
+                BackgroundColor = cell.Style.Fill.BackgroundColor.Rgb,
+                PatternColor = cell.Style.Fill.PatternColor.Rgb,
+                BackgroundColorTheme = cell.Style.Fill.BackgroundColor.Theme?.ToString(),
+                BackgroundColorTint = (double?)cell.Style.Fill.BackgroundColor.Tint
+            };
+
+            // 尺寸和合併
+            var column = worksheet.Column(cell.Start.Column);
+            cellInfo.Dimensions = new DimensionInfo
+            {
+                ColumnWidth = column.Width > 0 ? column.Width : worksheet.DefaultColWidth,
+                RowHeight = worksheet.Row(cell.Start.Row).Height,
+                IsMerged = cell.Merge
+            };
+
+            // 檢查是否為合併儲存格
+            if (cell.Merge)
+            {
+                var mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
+                if (mergedRange != null)
+                {
+                    cellInfo.Dimensions.MergedRangeAddress = mergedRange.Address;
+                    cellInfo.Dimensions.IsMainMergedCell = (cell.Start.Row == mergedRange.Start.Row && 
+                                                           cell.Start.Column == mergedRange.Start.Column);
+                    
+                    if (cellInfo.Dimensions.IsMainMergedCell == true)
+                    {
+                        cellInfo.Dimensions.RowSpan = mergedRange.Rows;
+                        cellInfo.Dimensions.ColSpan = mergedRange.Columns;
+                    }
+                    else
+                    {
+                        cellInfo.Dimensions.RowSpan = 1;
+                        cellInfo.Dimensions.ColSpan = 1;
+                    }
+                }
+            }
+
+            // Rich Text
+            if (cell.IsRichText && cell.RichText != null && cell.RichText.Count > 0)
+            {
+                cellInfo.RichText = new List<RichTextPart>();
+                
+                foreach (var richTextPart in cell.RichText)
+                {
+                    cellInfo.RichText.Add(new RichTextPart
+                    {
+                        Text = richTextPart.Text,
+                        Bold = richTextPart.Bold,
+                        Italic = richTextPart.Italic,
+                        UnderLine = richTextPart.UnderLine,
+                        Strike = richTextPart.Strike,
+                        Size = richTextPart.Size,
+                        FontName = richTextPart.FontName,
+                        Color = richTextPart.Color.IsEmpty ? null : $"#{richTextPart.Color.R:X2}{richTextPart.Color.G:X2}{richTextPart.Color.B:X2}",
+                        VerticalAlign = richTextPart.VerticalAlign.ToString()
+                    });
+                }
+            }
+
+            // 註解
+            if (cell.Comment != null)
+            {
+                cellInfo.Comment = new CommentInfo
+                {
+                    Text = cell.Comment.Text,
+                    Author = cell.Comment.Author,
+                    AutoFit = cell.Comment.AutoFit,
+                    Visible = cell.Comment.Visible
+                };
+            }
+
+            // 超連結
+            if (cell.Hyperlink != null)
+            {
+                cellInfo.Hyperlink = new HyperlinkInfo
+                {
+                    AbsoluteUri = cell.Hyperlink.AbsoluteUri,
+                    OriginalString = cell.Hyperlink.OriginalString,
+                    IsAbsoluteUri = cell.Hyperlink.IsAbsoluteUri
+                };
+            }
+
+            // 中繼資料
+            cellInfo.Metadata = new CellMetadata
+            {
+                HasFormula = !string.IsNullOrEmpty(cell.Formula),
+                IsRichText = cell.IsRichText,
+                StyleId = cell.StyleID,
+                StyleName = cell.StyleName,
+                Rows = cell.Rows,
+                Columns = cell.Columns,
+                Start = new CellPosition 
+                { 
+                    Row = cell.Start.Row, 
+                    Column = cell.Start.Column, 
+                    Address = cell.Start.Address 
+                },
+                End = new CellPosition 
+                { 
+                    Row = cell.End.Row, 
+                    Column = cell.End.Column, 
+                    Address = cell.End.Address 
+                }
+            };
+
             return cellInfo;
         }
 
-
-
-
+        /// <summary>
+        /// 將欄位編號轉換為 Excel 欄位名稱 (1 -> A, 2 -> B, 27 -> AA, etc.)
+        /// </summary>
+        private string GetColumnName(int columnNumber)
+        {
+            string columnName = "";
+            while (columnNumber > 0)
+            {
+                columnNumber--;
+                columnName = (char)('A' + columnNumber % 26) + columnName;
+                columnNumber /= 26;
+            }
+            return columnName;
+        }
 
         [HttpPost("upload")]
         public async Task<ActionResult<UploadResponse>> UploadExcel(IFormFile file)
@@ -227,14 +364,23 @@ namespace ExcelReaderAPI.Controllers
                 excelData.TotalRows = rowCount;
                 excelData.TotalColumns = colCount;
 
-                // 讀取標題行（第一行），保留格式信息
-                var headers = new List<object>();
+                // 生成 Excel 欄位標頭 (A, B, C, D...)
+                var columnHeaders = new List<object>();
+                for (int col = 1; col <= colCount; col++)
+                {
+                    columnHeaders.Add(GetColumnName(col));
+                }
+
+                // 讀取第一行內容作為內容標頭，保留格式信息
+                var contentHeaders = new List<object>();
                 for (int col = 1; col <= colCount; col++)
                 {
                     var headerCell = worksheet.Cells[1, col];
-                    headers.Add(CreateCellInfo(headerCell, worksheet));
+                    contentHeaders.Add(CreateCellInfo(headerCell, worksheet));
                 }
-                excelData.Headers = new[] { headers.ToArray() };
+                
+                // 提供兩種標頭：Excel 欄位標頭和內容標頭
+                excelData.Headers = new[] { columnHeaders.ToArray(), contentHeaders.ToArray() };
 
                 // 讀取資料行，保留原始格式（包含Rich Text）
                 var rows = new List<object[]>();
@@ -375,14 +521,23 @@ namespace ExcelReaderAPI.Controllers
                 excelData.TotalRows = rowCount;
                 excelData.TotalColumns = colCount;
 
-                // 讀取標題和資料 (使用相同的邏輯)
-                var headers = new List<object>();
+                // 生成 Excel 欄位標頭 (A, B, C, D...)
+                var columnHeaders = new List<object>();
+                for (int col = 1; col <= colCount; col++)
+                {
+                    columnHeaders.Add(GetColumnName(col));
+                }
+
+                // 讀取第一行內容作為內容標頭，保留格式信息
+                var contentHeaders = new List<object>();
                 for (int col = 1; col <= colCount; col++)
                 {
                     var headerCell = worksheet.Cells[1, col];
-                    headers.Add(CreateCellInfo(headerCell, worksheet));
+                    contentHeaders.Add(CreateCellInfo(headerCell, worksheet));
                 }
-                excelData.Headers = new[] { headers.ToArray() };
+                
+                // 提供兩種標頭：Excel 欄位標頭和內容標頭
+                excelData.Headers = new[] { columnHeaders.ToArray(), contentHeaders.ToArray() };
 
                 var rows = new List<object[]>();
                 for (int row = 1; row <= rowCount; row++) // 從第一行開始（包含所有行）
@@ -465,10 +620,10 @@ namespace ExcelReaderAPI.Controllers
                     return BadRequest("Excel 檔案為空或無有效資料");
                 }
 
-                var debugData = new
+                var debugData = new DebugExcelData
                 {
                     FileName = file.FileName,
-                    WorksheetInfo = new
+                    WorksheetInfo = new WorksheetInfo
                     {
                         Name = worksheet.Name,
                         TotalRows = worksheet.Dimension.Rows,
@@ -482,7 +637,7 @@ namespace ExcelReaderAPI.Controllers
                         Name = ws.Name,
                         Index = ws.Index,
                         State = ws.Hidden.ToString()
-                    }).ToList()
+                    }).Cast<object>().ToList()
                 };
 
                 return Ok(debugData);

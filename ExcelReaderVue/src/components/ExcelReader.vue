@@ -48,26 +48,42 @@
         <p>可用工作表：{{ excelData.availableWorksheets.join(', ') }}</p>
       </div>
 
+      <!-- 標頭類型選擇 -->
+      <div class="header-type-controls">
+        <label class="header-type-label">
+          標頭類型：
+          <select v-model="headerType" @change="onHeaderTypeChange" class="header-type-select">
+            <option value="column">Excel 欄位標頭 (A, B, C, D...)</option>
+            <option value="content">工作表內容標頭 (第一行內容)</option>
+          </select>
+        </label>
+      </div>
+
       <div class="table-container">
         <table class="data-table">
           <thead>
             <tr>
-              <template v-for="(header, index) in excelData.headers[0]" :key="index">
+              <template v-for="(header, index) in getCurrentHeaders()" :key="index">
+                <!-- Excel 欄位標頭（簡單字串） -->
+                <th v-if="headerType === 'column'" class="column-header">
+                  {{ header }}
+                </th>
+                <!-- 工作表內容標頭（ExcelCellInfo 物件） -->
                 <th
-                  v-if="shouldRenderCell(header)"
-                  :style="getHeaderStyle(header)"
-                  :colspan="header.dimensions?.colSpan || 1"
-                  :rowspan="header.dimensions?.rowSpan || 1"
+                  v-else-if="headerType === 'content' && shouldRenderCell(header as ExcelCellInfo)"
+                  :style="getHeaderStyle(header as ExcelCellInfo)"
+                  :colspan="(header as ExcelCellInfo).dimensions?.colSpan || 1"
+                  :rowspan="(header as ExcelCellInfo).dimensions?.rowSpan || 1"
                 >
-                  <span v-if="header.metadata?.isRichText" v-html="renderRichText(header)"></span>
-                  <span v-else v-html="formatTextWithLineBreaks(getDisplayValue(header))"></span>
+                  <span v-if="(header as ExcelCellInfo).metadata?.isRichText" v-html="renderRichText(header as ExcelCellInfo)"></span>
+                  <span v-else v-html="formatTextWithLineBreaks(getDisplayValue(header as ExcelCellInfo))"></span>
                   <div class="format-info" v-if="showFormatInfo">
-                    <small>格式: {{ header.numberFormat || '一般' }}</small>
-                    <small v-if="header.metadata?.isRichText" style="color: orange;">Rich Text</small>
+                    <small>格式: {{ (header as ExcelCellInfo).numberFormat || '一般' }}</small>
+                    <small v-if="(header as ExcelCellInfo).metadata?.isRichText" style="color: orange;">Rich Text</small>
                   </div>
                   <div class="position-info" v-if="showPositionInfo">
-                    <small>位置: {{ header.position?.address || '未知' }}</small>
-                    <small v-if="header.formula">公式: {{ header.formula }}</small>
+                    <small>位置: {{ (header as ExcelCellInfo).position?.address || '未知' }}</small>
+                    <small v-if="(header as ExcelCellInfo).formula">公式: {{ (header as ExcelCellInfo).formula }}</small>
                   </div>
                 </th>
               </template>
@@ -156,6 +172,7 @@ const showFormatInfo = ref<boolean>(false)
 const showOriginalValue = ref<boolean>(false)
 const showAdvancedFormatting = ref<boolean>(false)
 const showPositionInfo = ref<boolean>(false)
+const headerType = ref<'column' | 'content'>('column') // 默認顯示 Excel 欄位標頭
 
 const API_BASE_URL = 'http://localhost:5280/api' // API伺服器URL
 
@@ -278,6 +295,23 @@ const downloadJson = () => {
     message.value = `下載失敗：${errorMessage}`
     messageType.value = 'error'
     clearMessage()
+  }
+}
+
+const onHeaderTypeChange = () => {
+  // 當標頭類型改變時，可以在這裡添加額外的邏輯
+  // 例如：重新渲染表格或顯示通知
+}
+
+const getCurrentHeaders = () => {
+  if (!excelData.value || !excelData.value.headers) return []
+  
+  if (headerType.value === 'column') {
+    // 返回 Excel 欄位標頭 (A, B, C...)
+    return excelData.value.headers[0] || []
+  } else {
+    // 返回工作表內容標頭（第一行內容）
+    return excelData.value.headers[1] || []
   }
 }
 
@@ -955,5 +989,47 @@ h1 {
   .data-table td {
     padding: 8px;
   }
+}
+
+/* 標頭類型控制 */
+.header-type-controls {
+  margin: 15px 0;
+  padding: 10px;
+  background-color: #f8f9fa;
+  border-radius: 5px;
+  border-left: 4px solid #007bff;
+}
+
+.header-type-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 500;
+  color: #333;
+}
+
+.header-type-select {
+  padding: 5px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background-color: white;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.header-type-select:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+/* Excel 欄位標頭樣式 */
+.column-header {
+  background-color: #007bff !important;
+  color: white !important;
+  text-align: center !important;
+  font-weight: bold !important;
+  font-size: 14px !important;
+  min-width: 40px;
 }
 </style>
