@@ -101,8 +101,49 @@
                   :rowspan="cell.dimensions?.rowSpan || 1"
                 >
                   <div class="cell-content">
-                    <span v-if="cell.metadata?.isRichText" v-html="renderRichText(cell)"></span>
-                    <span v-else v-html="formatTextWithLineBreaks(getDisplayValue(cell))"></span>
+                    <!-- 圖片顯示 -->
+                    <div v-if="cell.images && cell.images.length > 0" class="cell-images">
+                      <div v-for="(image, imageIndex) in cell.images" :key="imageIndex" class="image-container">
+                        <!-- 檢查是否為佔位圖片 -->
+                        <div v-if="isPlaceholderImage(image)" class="placeholder-image">
+                          <div class="placeholder-content">
+                            <div class="placeholder-icon">🖼️</div>
+                            <div class="placeholder-text">
+                              <strong>DISPIMG 圖片</strong><br>
+                              <small>{{ image.fileName }}</small><br>
+                              <small style="color: #dc3545;">圖片資料無法存取</small><br>
+                              <small style="color: #6c757d;">EPPlus 7.1.0 限制</small>
+                            </div>
+                          </div>
+                        </div>
+                        <!-- 正常圖片 -->
+                        <img
+                          v-else
+                          :src="`data:image/${image.imageType.toLowerCase()};base64,${image.base64Data}`"
+                          :alt="image.name"
+                          :title="`${image.name} (${image.width}x${image.height}, ${formatFileSize(image.fileSize)})`"
+                          class="cell-image"
+                          :style="{
+                            width: Math.min(image.width, 200) + 'px',
+                            height: 'auto',
+                            maxHeight: '100px'
+                          }"
+                          @click="openImageModal(image)"
+                          @error="handleImageError"
+                        />
+                        <div v-if="showImageInfo" class="image-info">
+                          <small>{{ image.name }} ({{ image.imageType }})</small>
+                          <small>{{ image.width }}x{{ image.height }}</small>
+                          <small v-if="isPlaceholderImage(image)" style="color: #dc3545;">佔位圖片</small>
+                        </div>
+                      </div>
+                    </div>
+                    <!-- 文字內容 -->
+                    <div class="text-content">
+                      <span v-if="cell.metadata?.isRichText" v-html="renderRichText(cell)"></span>
+                      <span v-else v-html="formatTextWithLineBreaks(getDisplayValue(cell))"></span>
+                    </div>
+                    <!-- 位置資訊 -->
                     <div class="position-info" v-if="showPositionInfo && (cell.position?.address || cell.formula)">
                       <small v-if="cell.position?.address">{{ cell.position.address }}</small>
                       <small v-if="cell.formula" style="color: green;">{{ cell.formula }}</small>
@@ -132,6 +173,10 @@
           <input type="checkbox" v-model="showPositionInfo" />
           顯示位置資訊
         </label>
+        <label>
+          <input type="checkbox" v-model="showImageInfo" />
+          顯示圖片資訊
+        </label>
       </div>
 
       <div class="json-section">
@@ -148,6 +193,31 @@
       </div>
     </div>
   </div>
+
+  <!-- 圖片模態框 -->
+  <div v-if="showImageModal && selectedImage" class="image-modal" @click="closeImageModal">
+    <div class="modal-content" @click.stop>
+      <div class="modal-header">
+        <h3>{{ selectedImage.name }}</h3>
+        <button @click="closeImageModal" class="close-btn">×</button>
+      </div>
+      <div class="modal-body">
+        <img
+          :src="`data:image/${selectedImage.imageType.toLowerCase()};base64,${selectedImage.base64Data}`"
+          :alt="selectedImage.name"
+          class="modal-image"
+        />
+        <div class="image-details">
+          <p><strong>類型:</strong> {{ selectedImage.imageType }}</p>
+          <p><strong>尺寸:</strong> {{ selectedImage.width }} x {{ selectedImage.height }}</p>
+          <p><strong>檔案大小:</strong> {{ formatFileSize(selectedImage.fileSize) }}</p>
+          <p v-if="selectedImage.description"><strong>描述:</strong> {{ selectedImage.description }}</p>
+          <p v-if="selectedImage.anchorCell"><strong>錨點儲存格:</strong> {{ selectedImage.anchorCell.address }}</p>
+          <p v-if="selectedImage.hyperlinkAddress"><strong>超連結:</strong> <a :href="selectedImage.hyperlinkAddress" target="_blank">{{ selectedImage.hyperlinkAddress }}</a></p>
+        </div>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -157,7 +227,8 @@ import type {
   ExcelCellInfo,
   ExcelData,
   UploadResponse,
-  RichTextPart
+  RichTextPart,
+  ImageInfo
 } from '@/types'
 
 // 欄位標頭類型定義
@@ -179,9 +250,12 @@ const showFormatInfo = ref<boolean>(false)
 const showOriginalValue = ref<boolean>(false)
 const showAdvancedFormatting = ref<boolean>(false)
 const showPositionInfo = ref<boolean>(false)
+const showImageInfo = ref<boolean>(false)
 const headerType = ref<'column' | 'content'>('column') // 默認顯示 Excel 欄位標頭
+const selectedImage = ref<ImageInfo | null>(null)
+const showImageModal = ref<boolean>(false)
 
-const API_BASE_URL = 'http://localhost:5280/api' // API伺服器URL
+const API_BASE_URL = 'http://localhost:5282/api' // API伺服器URL
 
 const clearMessage = () => {
   setTimeout(() => {
@@ -416,6 +490,55 @@ const convertBorderStyle = (excelStyle?: string): string => {
   }
 
   return styleMap[excelStyle] || '1px solid'
+}
+
+// 格式化文件大小
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+// 打開圖片模態框
+const openImageModal = (image: ImageInfo) => {
+  selectedImage.value = image
+  showImageModal.value = true
+}
+
+// 關閉圖片模態框
+const closeImageModal = () => {
+  selectedImage.value = null
+  showImageModal.value = false
+}
+
+// 檢查是否為佔位圖片
+const isPlaceholderImage = (image: ImageInfo): boolean => {
+  // 檢查檔案名稱是否包含 dispimg
+  if (image.fileName && image.fileName.toLowerCase().includes('dispimg')) {
+    return true
+  }
+
+  // 檢查 Base64 資料是否為預設的佔位圖片
+  const placeholderBase64 = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAGXRFWHRDb21tZW50AEltYWdlIG5vdCBmb3VuZMk4KcsAAAA+SURBVFiF7dAxAQAACAOg9VPgAAIAAEAAABAAAAQAAAEAAABAAAAQAAAEAAABAAAAQAAAEAAABAAAAQAAAECKDYwIAAAAAElFTkSuQmCC'
+  if (image.base64Data === placeholderBase64) {
+    return true
+  }
+
+  // 檢查檔案大小是否為 0 或 hyperlink 包含 DISPIMG
+  if (image.fileSize === 0 || (image.hyperlinkAddress && image.hyperlinkAddress.includes('DISPIMG'))) {
+    return true
+  }
+
+  return false
+}
+
+// 處理圖片載入錯誤
+const handleImageError = (event: Event) => {
+  const img = event.target as HTMLImageElement
+  console.warn('圖片載入失敗:', img.src)
+  img.style.display = 'none'
 }
 
 // 獲取儲存格的邊框樣式
@@ -873,10 +996,7 @@ h1 {
 }
 
 /* 當有動態邊框時，讓動態邊框優先 */
-.data-table td[style*="border"] {
-  /* 清除默認邊框，讓行內樣式生效 */
-  /* border: none !important; */
-}
+/* .data-table td[style*="border"] 讓行內樣式生效 */
 
 .data-table th {
   background-color: #f8f9fa;
@@ -1076,5 +1196,175 @@ h1 {
   font-weight: bold !important;
   font-size: 14px !important;
   min-width: 40px;
+}
+
+/* 圖片顯示樣式 */
+.cell-images {
+  margin-bottom: 4px;
+}
+
+.image-container {
+  display: inline-block;
+  margin: 2px;
+  text-align: center;
+  width:100%;
+}
+
+.cell-image {
+  cursor: pointer;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.cell-image:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.image-info {
+  font-size: 10px;
+  color: #666;
+  margin-top: 2px;
+}
+
+.image-info small {
+  display: block;
+  line-height: 1.2;
+}
+
+.text-content {
+  margin-top: 4px;
+}
+
+/* 佔位圖片樣式 */
+.placeholder-image {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border: 2px dashed #dc3545;
+  border-radius: 8px;
+  background-color: #f8f9fa;
+  margin: 2px;
+  max-width: 200px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.placeholder-image:hover {
+  background-color: #e9ecef;
+}
+
+.placeholder-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.placeholder-icon {
+  font-size: 24px;
+  color: #dc3545;
+}
+
+.placeholder-text {
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.placeholder-text strong {
+  color: #495057;
+  font-size: 13px;
+}
+
+/* 圖片模態框樣式 */
+.image-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 8px;
+  max-width: 90%;
+  max-height: 90%;
+  overflow: auto;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #eee;
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: #333;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #666;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-btn:hover {
+  color: #000;
+}
+
+.modal-body {
+  padding: 20px;
+  text-align: center;
+}
+
+.modal-image {
+  max-width: 100%;
+  max-height: 60vh;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.image-details {
+  margin-top: 16px;
+  text-align: left;
+  background: #f8f9fa;
+  padding: 12px;
+  border-radius: 4px;
+}
+
+.image-details p {
+  margin: 4px 0;
+  font-size: 14px;
+}
+
+.image-details strong {
+  color: #333;
+}
+
+.image-details a {
+  color: #007bff;
+  text-decoration: none;
+}
+
+.image-details a:hover {
+  text-decoration: underline;
 }
 </style>

@@ -17,6 +17,32 @@ namespace ExcelReaderAPI.Models
     }
 
     /// <summary>
+    /// 圖片資訊
+    /// </summary>
+    public class ImageInfo
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public string ImageType { get; set; } = string.Empty; // 如：PNG, JPEG, GIF 等
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public double Left { get; set; }
+        public double Top { get; set; }
+        public string Base64Data { get; set; } = string.Empty; // Base64 編碼的圖片數據
+        public string? FileName { get; set; }
+        public long FileSize { get; set; }
+        public CellPosition? AnchorCell { get; set; } // 錨點儲存格
+        public string? HyperlinkAddress { get; set; } // 如果圖片有超連結
+        
+        // 縮放相關資訊
+        public int? OriginalWidth { get; set; } // 原始寬度
+        public int? OriginalHeight { get; set; } // 原始高度
+        public double? ScaleFactor { get; set; } // 縮放比例
+        public bool IsScaled { get; set; } = false; // 是否經過縮放
+        public string? ScaleMethod { get; set; } // 縮放方法描述
+    }
+
+    /// <summary>
     /// 儲存格位置資訊
     /// </summary>
     public class CellPosition
@@ -151,140 +177,143 @@ namespace ExcelReaderAPI.Models
     {
         // 基本位置和值
         public CellPosition Position { get; set; } = new();
-        
+
         // 基本值和顯示
         public object? Value { get; set; }
         public string Text { get; set; } = string.Empty;
         public string? Formula { get; set; }
         public string? FormulaR1C1 { get; set; }
-        
+
         // 資料類型
         public string? ValueType { get; set; }
         public string DataType { get; set; } = string.Empty;
-        
+
         // 格式化
         public string? NumberFormat { get; set; }
         public int? NumberFormatId { get; set; }
-        
+
         // 字體樣式
         public FontInfo Font { get; set; } = new();
-        
+
         // 對齊方式
         public AlignmentInfo Alignment { get; set; } = new();
-        
+
         // 邊框
         public BorderInfo Border { get; set; } = new();
-        
+
         // 填充/背景
         public FillInfo Fill { get; set; } = new();
-        
+
         // 尺寸和合併
         public DimensionInfo Dimensions { get; set; } = new();
-        
+
         // Rich Text
         public List<RichTextPart>? RichText { get; set; }
-        
+
         // 註解
         public CommentInfo? Comment { get; set; }
-        
+
         // 超連結
         public HyperlinkInfo? Hyperlink { get; set; }
-        
+
+        // 圖片
+        public List<ImageInfo>? Images { get; set; }
+
         // 中繼資料
         public CellMetadata Metadata { get; set; } = new();
 
         // 舊屬性保持兼容性（標記為過時但仍保留）
         // DisplayText 屬性已移除，請使用 Text 屬性
-        
+
         [Obsolete("請使用 NumberFormat 屬性")]
-        public string FormatCode 
-        { 
-            get => NumberFormat ?? string.Empty; 
-            set => NumberFormat = value; 
+        public string FormatCode
+        {
+            get => NumberFormat ?? string.Empty;
+            set => NumberFormat = value;
         }
-        
+
         [Obsolete("請使用 Font.Bold 屬性")]
-        public bool? FontBold 
-        { 
-            get => Font.Bold; 
-            set => Font.Bold = value; 
+        public bool? FontBold
+        {
+            get => Font.Bold;
+            set => Font.Bold = value;
         }
-        
+
         [Obsolete("請使用 Font.Size 屬性")]
-        public float? FontSize 
-        { 
-            get => Font.Size; 
-            set => Font.Size = value; 
+        public float? FontSize
+        {
+            get => Font.Size;
+            set => Font.Size = value;
         }
-        
+
         [Obsolete("請使用 Font.Name 屬性")]
-        public string? FontName 
-        { 
-            get => Font.Name; 
-            set => Font.Name = value; 
+        public string? FontName
+        {
+            get => Font.Name;
+            set => Font.Name = value;
         }
-        
+
         [Obsolete("請使用 Fill.BackgroundColor 屬性")]
-        public string? BackgroundColor 
-        { 
-            get => Fill.BackgroundColor; 
-            set => Fill.BackgroundColor = value; 
+        public string? BackgroundColor
+        {
+            get => Fill.BackgroundColor;
+            set => Fill.BackgroundColor = value;
         }
-        
+
         [Obsolete("請使用 Font.Color 屬性")]
-        public string? FontColor 
-        { 
-            get => Font.Color; 
-            set => Font.Color = value; 
+        public string? FontColor
+        {
+            get => Font.Color;
+            set => Font.Color = value;
         }
-        
+
         [Obsolete("請使用 Alignment.Horizontal 屬性")]
-        public string? TextAlign 
-        { 
-            get => Alignment.Horizontal; 
-            set => Alignment.Horizontal = value; 
+        public string? TextAlign
+        {
+            get => Alignment.Horizontal;
+            set => Alignment.Horizontal = value;
         }
-        
+
         [Obsolete("請使用 Dimensions.ColumnWidth 屬性")]
-        public double? ColumnWidth 
-        { 
-            get => Dimensions.ColumnWidth; 
-            set => Dimensions.ColumnWidth = value; 
+        public double? ColumnWidth
+        {
+            get => Dimensions.ColumnWidth;
+            set => Dimensions.ColumnWidth = value;
         }
-        
+
         [Obsolete("請使用 Metadata.IsRichText 屬性")]
-        public bool IsRichText 
-        { 
-            get => Metadata.IsRichText ?? false; 
-            set => Metadata.IsRichText = value; 
+        public bool IsRichText
+        {
+            get => Metadata.IsRichText ?? false;
+            set => Metadata.IsRichText = value;
         }
-        
+
         [Obsolete("請使用 Dimensions.RowSpan 屬性")]
-        public int? RowSpan 
-        { 
-            get => Dimensions.RowSpan; 
-            set => Dimensions.RowSpan = value; 
+        public int? RowSpan
+        {
+            get => Dimensions.RowSpan;
+            set => Dimensions.RowSpan = value;
         }
-        
+
         [Obsolete("請使用 Dimensions.ColSpan 屬性")]
-        public int? ColSpan 
-        { 
-            get => Dimensions.ColSpan; 
-            set => Dimensions.ColSpan = value; 
+        public int? ColSpan
+        {
+            get => Dimensions.ColSpan;
+            set => Dimensions.ColSpan = value;
         }
-        
+
         [Obsolete("請使用 Dimensions.IsMerged 屬性")]
-        public bool IsMerged 
-        { 
-            get => Dimensions.IsMerged ?? false; 
-            set => Dimensions.IsMerged = value; 
+        public bool IsMerged
+        {
+            get => Dimensions.IsMerged ?? false;
+            set => Dimensions.IsMerged = value;
         }
-        
+
         [Obsolete("請使用 Dimensions.IsMainMergedCell 屬性")]
-        public bool IsMainMergedCell 
-        { 
-            get => Dimensions.IsMainMergedCell ?? false; 
-            set => Dimensions.IsMainMergedCell = value; 
+        public bool IsMainMergedCell
+        {
+            get => Dimensions.IsMainMergedCell ?? false;
+            set => Dimensions.IsMainMergedCell = value;
         }
     }
 

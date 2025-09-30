@@ -18,6 +18,24 @@ export interface RichTextPart {
 }
 
 /**
+ * 圖片資訊
+ */
+export interface ImageInfo {
+  name: string
+  description?: string
+  imageType: string // 如：PNG, JPEG, GIF 等
+  width: number
+  height: number
+  left: number
+  top: number
+  base64Data: string // Base64 編碼的圖片數據
+  fileName?: string
+  fileSize: number
+  anchorCell?: CellPosition // 錨點儲存格
+  hyperlinkAddress?: string // 如果圖片有超連結
+}
+
+/**
  * 儲存格位置資訊
  */
 export interface CellPosition {
@@ -179,6 +197,9 @@ export interface ExcelCellInfo {
 
   // 超連結
   hyperlink?: HyperlinkInfo
+
+  // 圖片
+  images?: ImageInfo[]
 
   // 中繼資料
   metadata: CellMetadata
