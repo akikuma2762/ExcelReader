@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
-using OfficeOpenXml;
+using ClosedXML.Excel;
 using ExcelReaderAPI.Models;
 using ExcelReaderAPI.Utils;
 using System.Data;
@@ -17,58 +17,34 @@ namespace ExcelReaderAPI.Controllers
             _logger = logger;
         }
 
-        static ExcelController()
+        private IXLRange? FindMergedRange(IXLWorksheet worksheet, int row, int column)
         {
-            // 設定EPPlus授權（非商業用途）
-            ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+            // ClosedXML 提供更簡單的合併儲存格檢查
+            var cell = worksheet.Cell(row, column);
+            return cell.IsMerged() ? cell.MergedRange() : null;
         }
 
-        private ExcelRange? FindMergedRange(ExcelWorksheet worksheet, int row, int column)
-        {
-            // 檢查所有合併範圍，找到包含指定儲存格的範圍
-            foreach (var mergedRange in worksheet.MergedCells)
-            {
-                var range = worksheet.Cells[mergedRange];
-                if (row >= range.Start.Row && row <= range.End.Row &&
-                    column >= range.Start.Column && column <= range.End.Column)
-                {
-                    return range;
-                }
-            }
-            return null;
-        }
-
-        private string? GetTextAlign(OfficeOpenXml.Style.ExcelHorizontalAlignment alignment)
+        private string? GetTextAlign(XLAlignmentHorizontalValues alignment)
         {
             return alignment switch
             {
-                OfficeOpenXml.Style.ExcelHorizontalAlignment.Left => "left",
-                OfficeOpenXml.Style.ExcelHorizontalAlignment.Center => "center",
-                OfficeOpenXml.Style.ExcelHorizontalAlignment.Right => "right",
-                OfficeOpenXml.Style.ExcelHorizontalAlignment.Justify => "justify",
-                OfficeOpenXml.Style.ExcelHorizontalAlignment.Fill => "left",
-                OfficeOpenXml.Style.ExcelHorizontalAlignment.CenterContinuous => "center",
-                OfficeOpenXml.Style.ExcelHorizontalAlignment.Distributed => "justify",
+                XLAlignmentHorizontalValues.Left => "left",
+                XLAlignmentHorizontalValues.Center => "center",
+                XLAlignmentHorizontalValues.Right => "right",
+                XLAlignmentHorizontalValues.Justify => "justify",
+                XLAlignmentHorizontalValues.Fill => "left",
+                XLAlignmentHorizontalValues.CenterContinuous => "center",
+                XLAlignmentHorizontalValues.Distributed => "justify",
                 _ => null
             };
         }
 
-        private double GetColumnWidth(ExcelWorksheet worksheet, int columnIndex)
+        private double GetColumnWidth(IXLWorksheet worksheet, int columnIndex)
         {
-            // 取得該欄的寬度，若未設定則使用預設寬度
-            var column = worksheet.Column(columnIndex);
-            if (column.Width > 0)
-            {
-                return column.Width;
-            }
-            else
-            {
-                // 使用預設欄寬
-                return worksheet.DefaultColWidth;
-            }
+            return worksheet.Column(columnIndex).Width;
         }
 
-        private ExcelCellInfo CreateCellInfo(ExcelRange cell, ExcelWorksheet worksheet)
+        private ExcelCellInfo CreateCellInfo(IXLCell cell, IXLWorksheet worksheet)
         {
             if (cell == null || worksheet == null)
                 throw new ArgumentNullException("Cell or worksheet cannot be null");
@@ -80,143 +56,134 @@ namespace ExcelReaderAPI.Controllers
                 // 位置資訊
                 cellInfo.Position = new CellPosition
                 {
-                    Row = cell.Start.Row,
-                    Column = cell.Start.Column,
-                    Address = cell.Address ?? $"{GetColumnName(cell.Start.Column)}{cell.Start.Row}"
+                    Row = cell.Address.RowNumber,
+                    Column = cell.Address.ColumnNumber,
+                    Address = cell.Address.ToString() ?? ""
                 };
 
-            // 基本值和顯示
-            cellInfo.Value = cell.Value;
-            cellInfo.Text = cell.Text;
-            cellInfo.Formula = cell.Formula;
-            cellInfo.FormulaR1C1 = cell.FormulaR1C1;
+                // 基本值和顯示
+                cellInfo.Value = cell.Value.IsBlank ? null : cell.Value.ToString();
+                cellInfo.Text = cell.GetFormattedString();
+                cellInfo.Formula = cell.HasFormula ? cell.FormulaA1 : string.Empty;
+                cellInfo.FormulaR1C1 = cell.HasFormula ? cell.FormulaR1C1 : string.Empty;
 
-            // 資料類型
-            cellInfo.ValueType = cell.Value?.GetType().Name;
-            if (cell.Value == null)
-            {
-                cellInfo.DataType = "Empty";
-            }
-            else if (cell.Value is DateTime)
-            {
-                cellInfo.DataType = "DateTime";
-            }
-            else if (cell.Value is double || cell.Value is float || cell.Value is decimal)
-            {
-                cellInfo.DataType = "Number";
-            }
-            else if (cell.Value is int || cell.Value is long || cell.Value is short)
-            {
-                cellInfo.DataType = "Integer";
-            }
-            else if (cell.Value is bool)
-            {
-                cellInfo.DataType = "Boolean";
-            }
-            else
-            {
-                cellInfo.DataType = "Text";
-            }
-
-            // 格式化
-            cellInfo.NumberFormat = cell.Style.Numberformat.Format;
-            cellInfo.NumberFormatId = cell.Style.Numberformat.NumFmtID;
-
-            // 字體樣式
-            cellInfo.Font = new FontInfo
-            {
-                Name = cell.Style.Font.Name,
-                Size = cell.Style.Font.Size,
-                Bold = cell.Style.Font.Bold,
-                Italic = cell.Style.Font.Italic,
-                UnderLine = cell.Style.Font.UnderLine.ToString(),
-                Strike = cell.Style.Font.Strike,
-                Color = GetColorFromExcelColor(cell.Style.Font.Color),
-                ColorTheme = cell.Style.Font.Color.Theme?.ToString(),
-                ColorTint = (double?)cell.Style.Font.Color.Tint,
-                Charset = cell.Style.Font.Charset,
-                Scheme = cell.Style.Font.Scheme?.ToString(),
-                Family = cell.Style.Font.Family
-            };
-
-            // 對齊方式
-            cellInfo.Alignment = new AlignmentInfo
-            {
-                Horizontal = cell.Style.HorizontalAlignment.ToString(),
-                Vertical = cell.Style.VerticalAlignment.ToString(),
-                WrapText = cell.Style.WrapText,
-                Indent = cell.Style.Indent,
-                ReadingOrder = cell.Style.ReadingOrder.ToString(),
-                TextRotation = cell.Style.TextRotation,
-                ShrinkToFit = cell.Style.ShrinkToFit
-            };
-
-            // 邊框
-            // 邊框設定 - 使用增強的顏色處理
-            cellInfo.Border = new BorderInfo
-            {
-                Top = new BorderStyle 
-                { 
-                    Style = cell.Style.Border.Top.Style.ToString(), 
-                    Color = GetColorFromExcelColor(cell.Style.Border.Top.Color)
-                },
-                Bottom = new BorderStyle 
-                { 
-                    Style = cell.Style.Border.Bottom.Style.ToString(), 
-                    Color = GetColorFromExcelColor(cell.Style.Border.Bottom.Color)
-                },
-                Left = new BorderStyle 
-                { 
-                    Style = cell.Style.Border.Left.Style.ToString(), 
-                    Color = GetColorFromExcelColor(cell.Style.Border.Left.Color)
-                },
-                Right = new BorderStyle 
-                { 
-                    Style = cell.Style.Border.Right.Style.ToString(), 
-                    Color = GetColorFromExcelColor(cell.Style.Border.Right.Color)
-                },
-                Diagonal = new BorderStyle 
-                { 
-                    Style = cell.Style.Border.Diagonal.Style.ToString(), 
-                    Color = GetColorFromExcelColor(cell.Style.Border.Diagonal.Color)
-                },
-                DiagonalUp = cell.Style.Border.DiagonalUp,
-                DiagonalDown = cell.Style.Border.DiagonalDown
-            };
-
-            // 填充/背景
-            cellInfo.Fill = new FillInfo
-            {
-                PatternType = cell.Style.Fill.PatternType.ToString(),
-                BackgroundColor = GetBackgroundColor(cell),
-                PatternColor = cell.Style.Fill.PatternColor.Rgb,
-                BackgroundColorTheme = cell.Style.Fill.BackgroundColor.Theme?.ToString(),
-                BackgroundColorTint = (double?)cell.Style.Fill.BackgroundColor.Tint
-            };
-
-            // 尺寸和合併
-            var column = worksheet.Column(cell.Start.Column);
-            cellInfo.Dimensions = new DimensionInfo
-            {
-                ColumnWidth = column.Width > 0 ? column.Width : worksheet.DefaultColWidth,
-                RowHeight = worksheet.Row(cell.Start.Row).Height,
-                IsMerged = cell.Merge
-            };
-
-            // 檢查是否為合併儲存格
-            if (cell.Merge)
-            {
-                var mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
-                if (mergedRange != null)
+                // 資料類型
+                cellInfo.ValueType = cell.Value.Type.ToString();
+                if (cell.Value.IsBlank)
                 {
-                    cellInfo.Dimensions.MergedRangeAddress = mergedRange.Address;
-                    cellInfo.Dimensions.IsMainMergedCell = (cell.Start.Row == mergedRange.Start.Row && 
-                                                           cell.Start.Column == mergedRange.Start.Column);
+                    cellInfo.DataType = "Empty";
+                }
+                else if (cell.Value.IsDateTime)
+                {
+                    cellInfo.DataType = "DateTime";
+                }
+                else if (cell.Value.IsNumber)
+                {
+                    cellInfo.DataType = "Number";
+                }
+                else if (cell.Value.IsBoolean)
+                {
+                    cellInfo.DataType = "Boolean";
+                }
+                else
+                {
+                    cellInfo.DataType = "Text";
+                }
+
+                // 格式化
+                cellInfo.NumberFormat = cell.Style.NumberFormat.Format;
+                cellInfo.NumberFormatId = cell.Style.NumberFormat.NumberFormatId;
+
+                // 字體樣式 - ClosedXML 的顏色處理更直觀
+                cellInfo.Font = new FontInfo
+                {
+                    Name = cell.Style.Font.FontName,
+                    Size = (float)cell.Style.Font.FontSize,
+                    Bold = cell.Style.Font.Bold,
+                    Italic = cell.Style.Font.Italic,
+                    UnderLine = cell.Style.Font.Underline.ToString(),
+                    Strike = cell.Style.Font.Strikethrough,
+                    Color = GetColorFromXLColor(cell.Style.Font.FontColor),
+                    ColorTheme = null, // ClosedXML 處理主題顏色的方式不同
+                    ColorTint = null,
+                    Scheme = null,
+                    Family = (int?)cell.Style.Font.FontFamilyNumbering
+                };
+
+                // 對齊方式
+                cellInfo.Alignment = new AlignmentInfo
+                {
+                    Horizontal = cell.Style.Alignment.Horizontal.ToString(),
+                    Vertical = cell.Style.Alignment.Vertical.ToString(),
+                    WrapText = cell.Style.Alignment.WrapText,
+                    Indent = cell.Style.Alignment.Indent,
+                    ReadingOrder = cell.Style.Alignment.ReadingOrder.ToString(),
+                    TextRotation = cell.Style.Alignment.TextRotation,
+                    ShrinkToFit = cell.Style.Alignment.ShrinkToFit
+                };
+
+                // 邊框
+                cellInfo.Border = new BorderInfo
+                {
+                    Top = new BorderStyle 
+                    { 
+                        Style = cell.Style.Border.TopBorder.ToString(), 
+                        Color = GetColorFromXLColor(cell.Style.Border.TopBorderColor)
+                    },
+                    Bottom = new BorderStyle 
+                    { 
+                        Style = cell.Style.Border.BottomBorder.ToString(), 
+                        Color = GetColorFromXLColor(cell.Style.Border.BottomBorderColor)
+                    },
+                    Left = new BorderStyle 
+                    { 
+                        Style = cell.Style.Border.LeftBorder.ToString(), 
+                        Color = GetColorFromXLColor(cell.Style.Border.LeftBorderColor)
+                    },
+                    Right = new BorderStyle 
+                    { 
+                        Style = cell.Style.Border.RightBorder.ToString(), 
+                        Color = GetColorFromXLColor(cell.Style.Border.RightBorderColor)
+                    },
+                    Diagonal = new BorderStyle 
+                    { 
+                        Style = cell.Style.Border.DiagonalBorder.ToString(), 
+                        Color = GetColorFromXLColor(cell.Style.Border.DiagonalBorderColor)
+                    },
+                    DiagonalUp = cell.Style.Border.DiagonalUp,
+                    DiagonalDown = cell.Style.Border.DiagonalDown
+                };
+
+                // 填充/背景
+                cellInfo.Fill = new FillInfo
+                {
+                    PatternType = cell.Style.Fill.PatternType.ToString(),
+                    BackgroundColor = GetColorFromXLColor(cell.Style.Fill.BackgroundColor),
+                    PatternColor = GetColorFromXLColor(cell.Style.Fill.PatternColor),
+                    BackgroundColorTheme = null,
+                    BackgroundColorTint = null
+                };
+
+                // 尺寸和合併
+                cellInfo.Dimensions = new DimensionInfo
+                {
+                    ColumnWidth = worksheet.Column(cell.Address.ColumnNumber).Width,
+                    RowHeight = worksheet.Row(cell.Address.RowNumber).Height,
+                    IsMerged = cell.IsMerged()
+                };
+
+                // 檢查是否為合併儲存格
+                if (cell.IsMerged())
+                {
+                    var mergedRange = cell.MergedRange();
+                    cellInfo.Dimensions.MergedRangeAddress = mergedRange.RangeAddress.ToString();
+                    cellInfo.Dimensions.IsMainMergedCell = (cell.Address.RowNumber == mergedRange.FirstCell().Address.RowNumber && 
+                                                           cell.Address.ColumnNumber == mergedRange.FirstCell().Address.ColumnNumber);
                     
                     if (cellInfo.Dimensions.IsMainMergedCell == true)
                     {
-                        cellInfo.Dimensions.RowSpan = mergedRange.Rows;
-                        cellInfo.Dimensions.ColSpan = mergedRange.Columns;
+                        cellInfo.Dimensions.RowSpan = mergedRange.RowCount();
+                        cellInfo.Dimensions.ColSpan = mergedRange.ColumnCount();
                         
                         // 對於主合併儲存格，使用整個合併範圍的邊框
                         cellInfo.Border = GetMergedCellBorder(worksheet, mergedRange, cell);
@@ -227,116 +194,89 @@ namespace ExcelReaderAPI.Controllers
                         cellInfo.Dimensions.ColSpan = 1;
                     }
                 }
-            }
 
-            // Rich Text
-            if (cell.IsRichText && cell.RichText != null && cell.RichText.Count > 0)
-            {
-                cellInfo.RichText = new List<RichTextPart>();
-                
-                for (int i = 0; i < cell.RichText.Count; i++)
+                // Rich Text - ClosedXML 的 Rich Text 處理更準確
+                if (cell.HasRichText)
                 {
-                    var richTextPart = cell.RichText[i];
+                    cellInfo.RichText = new List<RichTextPart>();
                     
-                    // 修正第一個 Rich Text 部分的格式問題
-                    // EPPlus 的第一個 Rich Text 部分經常缺少格式資訊，需要從儲存格樣式繼承
-                    var bold = richTextPart.Bold;
-                    var italic = richTextPart.Italic;
-                    var size = richTextPart.Size;
-                    var fontName = richTextPart.FontName;
-                    var color = richTextPart.Color;
-                    
-                    // 如果第一個 Rich Text 部分沒有格式資訊，從儲存格樣式繼承
-                    if (i == 0)
+                    foreach (var richTextRun in cell.GetRichText())
                     {
-                        if (size == 0 || string.IsNullOrEmpty(fontName) || (!bold && !italic))
+                        cellInfo.RichText.Add(new RichTextPart
                         {
-                            size = size == 0 ? cell.Style.Font.Size : size;
-                            fontName = string.IsNullOrEmpty(fontName) ? cell.Style.Font.Name : fontName;
-                            
-                            // 只有當 Rich Text 部分沒有設定格式時才繼承
-                            if (!richTextPart.Bold && cell.Style.Font.Bold)
-                                bold = true;
-                            if (!richTextPart.Italic && cell.Style.Font.Italic)
-                                italic = true;
-                        }
+                            Text = richTextRun.Text,
+                            Bold = richTextRun.Bold,
+                            Italic = richTextRun.Italic,
+                            UnderLine = richTextRun.Underline != XLFontUnderlineValues.None,
+                            Strike = richTextRun.Strikethrough,
+                            Size = (float)richTextRun.FontSize,
+                            FontName = richTextRun.FontName,
+                            Color = GetColorFromXLColor(richTextRun.FontColor), // ClosedXML 的顏色處理更準確
+                            VerticalAlign = richTextRun.VerticalAlignment.ToString()
+                        });
                     }
-                    
-                    cellInfo.RichText.Add(new RichTextPart
+                }
+
+                // 註解
+                if (cell.HasComment)
+                {
+                    cellInfo.Comment = new CommentInfo
                     {
-                        Text = richTextPart.Text,
-                        Bold = bold,
-                        Italic = italic,
-                        UnderLine = richTextPart.UnderLine,
-                        Strike = richTextPart.Strike,
-                        Size = size,
-                        FontName = fontName,
-                        Color = richTextPart.Color.IsEmpty ? null : $"#{richTextPart.Color.R:X2}{richTextPart.Color.G:X2}{richTextPart.Color.B:X2}",
-                        VerticalAlign = richTextPart.VerticalAlign.ToString()
-                    });
+                        Text = cell.GetComment().Text,
+                        Author = cell.GetComment().Author,
+                        AutoFit = false, // ClosedXML 中需要不同的處理方式
+                        Visible = cell.GetComment().Visible
+                    };
                 }
-            }
 
-            // 註解
-            if (cell.Comment != null)
-            {
-                cellInfo.Comment = new CommentInfo
+                // 超連結
+                if (cell.HasHyperlink)
                 {
-                    Text = cell.Comment.Text,
-                    Author = cell.Comment.Author,
-                    AutoFit = cell.Comment.AutoFit,
-                    Visible = cell.Comment.Visible
-                };
-            }
-
-            // 超連結
-            if (cell.Hyperlink != null)
-            {
-                cellInfo.Hyperlink = new HyperlinkInfo
-                {
-                    AbsoluteUri = cell.Hyperlink.AbsoluteUri,
-                    OriginalString = cell.Hyperlink.OriginalString,
-                    IsAbsoluteUri = cell.Hyperlink.IsAbsoluteUri
-                };
-            }
-
-            // 中繼資料
-            cellInfo.Metadata = new CellMetadata
-            {
-                HasFormula = !string.IsNullOrEmpty(cell.Formula),
-                IsRichText = cell.IsRichText,
-                StyleId = cell.StyleID,
-                StyleName = cell.StyleName,
-                Rows = cell.Rows,
-                Columns = cell.Columns,
-                Start = new CellPosition 
-                { 
-                    Row = cell.Start.Row, 
-                    Column = cell.Start.Column, 
-                    Address = cell.Start.Address 
-                },
-                End = new CellPosition 
-                { 
-                    Row = cell.End.Row, 
-                    Column = cell.End.Column, 
-                    Address = cell.End.Address 
+                    cellInfo.Hyperlink = new HyperlinkInfo
+                    {
+                        AbsoluteUri = cell.GetHyperlink().ExternalAddress?.ToString(),
+                        OriginalString = cell.GetHyperlink().ExternalAddress?.ToString(),
+                        IsAbsoluteUri = cell.GetHyperlink().IsExternal
+                    };
                 }
-            };
 
-            return cellInfo;
+                // 中繼資料
+                cellInfo.Metadata = new CellMetadata
+                {
+                    HasFormula = cell.HasFormula,
+                    IsRichText = cell.HasRichText,
+                    StyleId = 0, // ClosedXML 不直接暴露 StyleId
+                    StyleName = string.Empty,
+                    Rows = 1,
+                    Columns = 1,
+                    Start = new CellPosition 
+                    { 
+                        Row = cell.Address.RowNumber, 
+                        Column = cell.Address.ColumnNumber, 
+                        Address = cell.Address.ToString() ?? ""
+                    },
+                    End = new CellPosition 
+                    { 
+                        Row = cell.Address.RowNumber, 
+                        Column = cell.Address.ColumnNumber, 
+                        Address = cell.Address.ToString() ?? ""
+                    }
+                };
+
+                return cellInfo;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"讀取儲存格 {cell?.Address ?? "未知位置"} 時發生錯誤");
+                _logger.LogError(ex, $"讀取儲存格 {cell?.Address?.ToString() ?? "未知位置"} 時發生錯誤");
                 
                 // 返回基本的儲存格資訊，避免整個處理中斷
                 return new ExcelCellInfo
                 {
                     Position = new CellPosition
                     {
-                        Row = cell?.Start.Row ?? 0,
-                        Column = cell?.Start.Column ?? 0,
-                        Address = cell?.Address ?? "未知"
+                        Row = cell?.Address?.RowNumber ?? 0,
+                        Column = cell?.Address?.ColumnNumber ?? 0,
+                        Address = cell?.Address?.ToString() ?? "未知"
                     },
                     Value = null,
                     Text = "",
@@ -354,8 +294,8 @@ namespace ExcelReaderAPI.Controllers
             string columnName = "";
             while (columnNumber > 0)
             {
-                columnNumber--;
-                columnName = (char)('A' + columnNumber % 26) + columnName;
+                columnNumber--; // 轉換為 0-based 索引
+                columnName = (char)('A' + (columnNumber % 26)) + columnName;
                 columnNumber /= 26;
             }
             return columnName;
@@ -364,53 +304,53 @@ namespace ExcelReaderAPI.Controllers
         /// <summary>
         /// 獲取合併儲存格的邊框 (考慮整個合併範圍的外邊界)
         /// </summary>
-        private BorderInfo GetMergedCellBorder(ExcelWorksheet worksheet, ExcelRange mergedRange, ExcelRange currentCell)
+        private BorderInfo GetMergedCellBorder(IXLWorksheet worksheet, IXLRange mergedRange, IXLCell currentCell)
         {
             var border = new BorderInfo();
             
             // 獲取合併範圍的邊界
-            int topRow = mergedRange.Start.Row;
-            int bottomRow = mergedRange.End.Row;
-            int leftCol = mergedRange.Start.Column;
-            int rightCol = mergedRange.End.Column;
+            int topRow = mergedRange.FirstCell().Address.RowNumber;
+            int bottomRow = mergedRange.LastCell().Address.RowNumber;
+            int leftCol = mergedRange.FirstCell().Address.ColumnNumber;
+            int rightCol = mergedRange.LastCell().Address.ColumnNumber;
             
             // 上邊框：來自合併範圍頂部的儲存格
-            var topCell = worksheet.Cells[topRow, currentCell.Start.Column];
+            var topCell = worksheet.Cell(topRow, currentCell.Address.ColumnNumber);
             border.Top = new BorderStyle 
             { 
-                Style = topCell.Style.Border.Top.Style.ToString(), 
-                Color = GetColorFromExcelColor(topCell.Style.Border.Top.Color)
+                Style = topCell.Style.Border.TopBorder.ToString(), 
+                Color = GetColorFromXLColor(topCell.Style.Border.TopBorderColor)
             };
             
             // 下邊框：來自合併範圍底部的儲存格
-            var bottomCell = worksheet.Cells[bottomRow, currentCell.Start.Column];
+            var bottomCell = worksheet.Cell(bottomRow, currentCell.Address.ColumnNumber);
             border.Bottom = new BorderStyle 
             { 
-                Style = bottomCell.Style.Border.Bottom.Style.ToString(), 
-                Color = GetColorFromExcelColor(bottomCell.Style.Border.Bottom.Color)
+                Style = bottomCell.Style.Border.BottomBorder.ToString(), 
+                Color = GetColorFromXLColor(bottomCell.Style.Border.BottomBorderColor)
             };
             
             // 左邊框：來自合併範圍左側的儲存格
-            var leftCell = worksheet.Cells[currentCell.Start.Row, leftCol];
+            var leftCell = worksheet.Cell(currentCell.Address.RowNumber, leftCol);
             border.Left = new BorderStyle 
             { 
-                Style = leftCell.Style.Border.Left.Style.ToString(), 
-                Color = GetColorFromExcelColor(leftCell.Style.Border.Left.Color)
+                Style = leftCell.Style.Border.LeftBorder.ToString(), 
+                Color = GetColorFromXLColor(leftCell.Style.Border.LeftBorderColor)
             };
             
             // 右邊框：來自合併範圍右側的儲存格
-            var rightCell = worksheet.Cells[currentCell.Start.Row, rightCol];
+            var rightCell = worksheet.Cell(currentCell.Address.RowNumber, rightCol);
             border.Right = new BorderStyle 
             { 
-                Style = rightCell.Style.Border.Right.Style.ToString(), 
-                Color = GetColorFromExcelColor(rightCell.Style.Border.Right.Color)
+                Style = rightCell.Style.Border.RightBorder.ToString(), 
+                Color = GetColorFromXLColor(rightCell.Style.Border.RightBorderColor)
             };
             
             // 對角線邊框使用當前儲存格的設定
             border.Diagonal = new BorderStyle 
             { 
-                Style = currentCell.Style.Border.Diagonal.Style.ToString(), 
-                Color = GetColorFromExcelColor(currentCell.Style.Border.Diagonal.Color)
+                Style = currentCell.Style.Border.DiagonalBorder.ToString(), 
+                Color = GetColorFromXLColor(currentCell.Style.Border.DiagonalBorderColor)
             };
             border.DiagonalUp = currentCell.Style.Border.DiagonalUp;
             border.DiagonalDown = currentCell.Style.Border.DiagonalDown;
@@ -419,257 +359,150 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
-        /// 獲取儲存格的背景色
+        /// 從 ClosedXML XLColor 物件提取顏色值
+        /// ClosedXML 的顏色處理比 EPPlus 更直觀和準確
         /// </summary>
-        private string? GetBackgroundColor(ExcelRange cell)
+        private string? GetColorFromXLColor(XLColor xlColor)
         {
-            var fill = cell.Style.Fill;
-            
-            // 調試：顯示完整的顏色資訊
-            _logger.LogInformation($"Cell {cell.Address} - PatternType: {fill.PatternType}, " +
-                $"BackgroundColor[Rgb: '{fill.BackgroundColor.Rgb}', Theme: {fill.BackgroundColor.Theme}, Tint: {fill.BackgroundColor.Tint}, Indexed: {fill.BackgroundColor.Indexed}], " +
-                $"PatternColor[Rgb: '{fill.PatternColor.Rgb}', Theme: {fill.PatternColor.Theme}, Tint: {fill.PatternColor.Tint}, Indexed: {fill.PatternColor.Indexed}]");
-            
-            // 檢查填充類型，只有 Solid 或 Pattern 類型才有背景色
-            if (fill.PatternType == OfficeOpenXml.Style.ExcelFillStyle.Solid)
-            {
-                // Solid 填充：使用背景色
-                return GetColorFromExcelColor(fill.BackgroundColor);
-            }
-            else if (fill.PatternType != OfficeOpenXml.Style.ExcelFillStyle.None)
-            {
-                // Pattern 填充：優先使用 BackgroundColor，其次使用 PatternColor
-                return GetColorFromExcelColor(fill.BackgroundColor) ?? 
-                       GetColorFromExcelColor(fill.PatternColor);
-            }
-            
-            return null;
-        }
-
-        /// <summary>
-        /// 從 EPPlus ExcelColor 物件提取顏色值
-        /// </summary>
-        private string? GetColorFromExcelColor(OfficeOpenXml.Style.ExcelColor excelColor)
-        {
-            if (excelColor == null)
+            if (xlColor == null)
                 return null;
 
-            // 1. 優先使用 RGB 值
-            if (!string.IsNullOrEmpty(excelColor.Rgb))
-            {
-                var colorValue = excelColor.Rgb.TrimStart('#');
-                
-                // 處理 ARGB 格式（8位）轉為 RGB 格式（6位）
-                if (colorValue.Length == 8)
-                {
-                    // ARGB 格式：前2位是Alpha，後6位是RGB
-                    colorValue = colorValue.Substring(2);
-                }
-                
-                if (colorValue.Length == 6)
-                {
-                    return colorValue.ToUpperInvariant();
-                }
-                
-                // 處理3位短格式（例如：F00 -> FF0000）
-                if (colorValue.Length == 3)
-                {
-                    return $"{colorValue[0]}{colorValue[0]}{colorValue[1]}{colorValue[1]}{colorValue[2]}{colorValue[2]}";
-                }
-            }
-
-            // 2. 嘗試使用索引顏色
-            if (excelColor.Indexed >= 0)
-            {
-                return GetIndexedColor(excelColor.Indexed);
-            }
-
-            // 3. 嘗試使用主題顏色
-            if (excelColor.Theme != null)
-            {
-                var themeValue = (int)excelColor.Theme;
-                var tintValue = (double)excelColor.Tint;
-                return GetThemeColor(themeValue, tintValue);
-            }
-
-            // 4. 嘗試自動顏色
-            if (excelColor.Auto == true)
-            {
-                return "000000"; // 預設黑色
-            }
-            
-            return null;
-        }
-
-        /// <summary>
-        /// 獲取 Excel 索引顏色對應的 RGB 值
-        /// </summary>
-        private string? GetIndexedColor(int colorIndex)
-        {
-            // Excel 標準索引顏色對應表（使用 Excel 2016+ 標準色彩）
-            var indexedColors = new Dictionary<int, string>
-            {
-                // Excel 自動色彩和系統色彩 (0-7)
-                { 0, "000000" },  // Automatic / Black
-                { 1, "FFFFFF" },  // White
-                { 2, "FF0000" },  // Red
-                { 3, "00FF00" },  // Bright Green
-                { 4, "0000FF" },  // Blue
-                { 5, "FFFF00" },  // Yellow
-                { 6, "FF00FF" },  // Magenta
-                { 7, "00FFFF" },  // Cyan
-                
-                // Excel 標準色彩 (8-15) - 重複定義確保相容性
-                { 8, "000000" },  // Black
-                { 9, "FFFFFF" },  // White
-                { 10, "FF0000" }, // Red
-                { 11, "00FF00" }, // Bright Green
-                { 12, "0000FF" }, // Blue
-                { 13, "FFFF00" }, // Yellow
-                { 14, "FF00FF" }, // Magenta
-                { 15, "00FFFF" }, // Cyan
-                
-                // Excel 標準調色板 (16-31)
-                { 16, "800000" }, // Dark Red (Maroon)
-                { 17, "008000" }, // Green
-                { 18, "000080" }, // Dark Blue (Navy)
-                { 19, "808000" }, // Dark Yellow (Olive)
-                { 20, "800080" }, // Purple
-                { 21, "008080" }, // Dark Cyan (Teal)
-                { 22, "C0C0C0" }, // Light Gray (Silver)
-                { 23, "808080" }, // Gray
-                
-                // Excel 擴展色彩 (24-39)
-                { 24, "9999FF" }, // Periwinkle
-                { 25, "993366" }, // Plum
-                { 26, "FFFFCC" }, // Ivory
-                { 27, "CCFFFF" }, // Light Turquoise
-                { 28, "660066" }, // Dark Purple
-                { 29, "FF8080" }, // Coral
-                { 30, "0066CC" }, // Ocean Blue
-                { 31, "CCCCFF" }, // Ice Blue
-                
-                // Excel 標準色彩擴展 (32-39)
-                { 32, "000080" }, // Dark Blue
-                { 33, "FF00FF" }, // Pink
-                { 34, "FFFF00" }, // Yellow
-                { 35, "00FFFF" }, // Turquoise
-                { 36, "800080" }, // Violet
-                { 37, "800000" }, // Dark Red
-                { 38, "008080" }, // Teal
-                { 39, "0000FF" }, // Blue
-                
-                // Excel 淺色系列 (40-47)
-                { 40, "00CCFF" }, // Sky Blue
-                { 41, "CCFFFF" }, // Light Turquoise
-                { 42, "CCFFCC" }, // Light Green
-                { 43, "FFFF99" }, // Light Yellow
-                { 44, "99CCFF" }, // Pale Blue
-                { 45, "FF99CC" }, // Rose
-                { 46, "CC99FF" }, // Lavender
-                { 47, "FFCC99" }, // Peach
-                
-                // Excel 亮色系列 (48-55)
-                { 48, "3366FF" }, // Light Blue
-                { 49, "33CCCC" }, // Aqua
-                { 50, "99CC00" }, // Lime
-                { 51, "FFCC00" }, // Gold
-                { 52, "FF9900" }, // Orange
-                { 53, "FF6600" }, // Orange Red
-                { 54, "666699" }, // Blue Gray
-                { 55, "969696" }, // Gray 40%
-                
-                // Excel 深色系列 (56-63)
-                { 56, "003366" }, // Dark Teal
-                { 57, "339966" }, // Sea Green
-                { 58, "003300" }, // Dark Green
-                { 59, "333300" }, // Dark Olive
-                { 60, "964B00" }, // Brown (咖啡色)
-                { 61, "993366" }, // Dark Rose
-                { 62, "333399" }, // Indigo
-                { 63, "333333" }  // Gray 80%
-            };
-            
-            return indexedColors.ContainsKey(colorIndex) ? indexedColors[colorIndex] : null;
-        }
-
-        /// <summary>
-        /// 獲取 Excel 主題顏色對應的 RGB 值
-        /// </summary>
-        private string? GetThemeColor(int themeIndex, double tint)
-        {
-            // Excel 標準主題顏色對應表（Office 預設主題）
-            var themeColors = new Dictionary<int, string>
-            {
-                { 0, "FFFFFF" },  // Background 1 / Light 1
-                { 1, "000000" },  // Text 1 / Dark 1
-                { 2, "E7E6E6" },  // Background 2 / Light 2
-                { 3, "44546A" },  // Text 2 / Dark 2
-                { 4, "5B9BD5" },  // Accent 1
-                { 5, "70AD47" },  // Accent 2
-                { 6, "A5A5A5" },  // Accent 3
-                { 7, "FFC000" },  // Accent 4
-                { 8, "4472C4" },  // Accent 5
-                { 9, "264478" },  // Accent 6
-                { 10, "0563C1" }, // Hyperlink
-                { 11, "954F72" }  // Followed Hyperlink
-            };
-            
-            if (!themeColors.ContainsKey(themeIndex))
-            {
-                return null;
-            }
-            
-            var baseColor = themeColors[themeIndex];
-            
-            // 如果有 Tint 值，需要調整顏色亮度
-            if (Math.Abs(tint) > 0.001)
-            {
-                return ApplyTint(baseColor, tint);
-            }
-            
-            return baseColor;
-        }
-
-        /// <summary>
-        /// 對顏色應用 Tint 效果
-        /// </summary>
-        private string ApplyTint(string hexColor, double tint)
-        {
-            if (hexColor.Length != 6) return hexColor;
-            
             try
             {
-                var r = Convert.ToInt32(hexColor.Substring(0, 2), 16);
-                var g = Convert.ToInt32(hexColor.Substring(2, 2), 16);
-                var b = Convert.ToInt32(hexColor.Substring(4, 2), 16);
-                
-                if (tint < 0)
+                // 檢查顏色類型，避免主題顏色轉換錯誤
+                switch (xlColor.ColorType)
                 {
-                    // Tint < 0: 變暗
-                    r = (int)(r * (1 + tint));
-                    g = (int)(g * (1 + tint));
-                    b = (int)(b * (1 + tint));
+                    case XLColorType.Color:
+                        // 直接的顏色值
+                        var color = xlColor.Color;
+                        if (color.A == 0)
+                            return null;
+                        return $"rgb({color.R},{color.G},{color.B})";
+                        
+                    case XLColorType.Theme:
+                        // 主題顏色，使用索引和色調
+                        return GetThemeColorRgb(xlColor.ThemeColor, xlColor.ThemeTint);
+                        
+                    case XLColorType.Indexed:
+                        // 索引顏色
+                        return GetIndexedColorRgb(xlColor.Indexed);
+                        
+                    default:
+                        return null;
                 }
-                else
-                {
-                    // Tint > 0: 變亮
-                    r = (int)(r + (255 - r) * tint);
-                    g = (int)(g + (255 - g) * tint);
-                    b = (int)(b + (255 - b) * tint);
-                }
-                
-                // 確保值在 0-255 範圍內
-                r = Math.Max(0, Math.Min(255, r));
-                g = Math.Max(0, Math.Min(255, g));
-                b = Math.Max(0, Math.Min(255, b));
-                
-                return $"{r:X2}{g:X2}{b:X2}";
             }
-            catch
+            catch (Exception ex)
             {
-                return hexColor;
+                _logger.LogWarning(ex, $"處理顏色時發生錯誤，顏色類型: {xlColor.ColorType}");
+                return null;
             }
+        }
+
+        /// <summary>
+        /// 獲取主題顏色的 RGB 值
+        /// </summary>
+        private string? GetThemeColorRgb(XLThemeColor themeColor, double tint)
+        {
+            // Office 標準主題顏色對應表
+            var themeColors = new Dictionary<XLThemeColor, (int R, int G, int B)>
+            {
+                { XLThemeColor.Background1, (255, 255, 255) },  // White
+                { XLThemeColor.Text1, (0, 0, 0) },              // Black
+                { XLThemeColor.Background2, (231, 230, 230) },  // Light Gray
+                { XLThemeColor.Text2, (68, 84, 106) },          // Dark Gray
+                { XLThemeColor.Accent1, (91, 155, 213) },       // Blue
+                { XLThemeColor.Accent2, (112, 173, 71) },       // Green
+                { XLThemeColor.Accent3, (165, 165, 165) },      // Gray
+                { XLThemeColor.Accent4, (255, 192, 0) },        // Orange
+                { XLThemeColor.Accent5, (68, 114, 196) },       // Dark Blue
+                { XLThemeColor.Accent6, (38, 68, 120) },        // Navy Blue
+                { XLThemeColor.Hyperlink, (5, 99, 193) },       // Hyperlink Blue
+                { XLThemeColor.FollowedHyperlink, (149, 79, 114) } // Followed Hyperlink Purple
+            };
+
+            if (!themeColors.ContainsKey(themeColor))
+            {
+                return "rgb(0,0,0)"; // 預設黑色
+            }
+
+            var baseColor = themeColors[themeColor];
+            
+            // 應用色調調整
+            if (Math.Abs(tint) > 0.001)
+            {
+                var adjustedColor = ApplyTintToRgb(baseColor, tint);
+                return $"rgb({adjustedColor.R},{adjustedColor.G},{adjustedColor.B})";
+            }
+            
+            return $"rgb({baseColor.R},{baseColor.G},{baseColor.B})";
+        }
+
+        /// <summary>
+        /// 獲取索引顏色的 RGB 值
+        /// </summary>
+        private string? GetIndexedColorRgb(int colorIndex)
+        {
+            // Excel 標準索引顏色對應表
+            var indexedColors = new Dictionary<int, (int R, int G, int B)>
+            {
+                { 0, (0, 0, 0) },        // Black
+                { 1, (255, 255, 255) },  // White
+                { 2, (255, 0, 0) },      // Red
+                { 3, (0, 255, 0) },      // Bright Green
+                { 4, (0, 0, 255) },      // Blue
+                { 5, (255, 255, 0) },    // Yellow
+                { 6, (255, 0, 255) },    // Magenta
+                { 7, (0, 255, 255) },    // Cyan
+                { 8, (0, 0, 0) },        // Black
+                { 9, (255, 255, 255) },  // White
+                { 10, (255, 0, 0) },     // Red
+                { 16, (128, 0, 0) },     // Dark Red
+                { 17, (0, 128, 0) },     // Green
+                { 18, (0, 0, 128) },     // Dark Blue
+                { 19, (128, 128, 0) },   // Dark Yellow
+                { 20, (128, 0, 128) },   // Purple
+                { 21, (0, 128, 128) },   // Dark Cyan
+                { 22, (192, 192, 192) }, // Light Gray
+                { 23, (128, 128, 128) }  // Gray
+            };
+            
+            if (indexedColors.ContainsKey(colorIndex))
+            {
+                var color = indexedColors[colorIndex];
+                return $"rgb({color.R},{color.G},{color.B})";
+            }
+            
+            return "rgb(0,0,0)"; // 預設黑色
+        }
+
+        /// <summary>
+        /// 對 RGB 顏色應用色調效果
+        /// </summary>
+        private (int R, int G, int B) ApplyTintToRgb((int R, int G, int B) baseColor, double tint)
+        {
+            int r, g, b;
+            
+            if (tint < 0)
+            {
+                // Tint < 0: 變暗
+                r = (int)(baseColor.R * (1 + tint));
+                g = (int)(baseColor.G * (1 + tint));
+                b = (int)(baseColor.B * (1 + tint));
+            }
+            else
+            {
+                // Tint > 0: 變亮
+                r = (int)(baseColor.R + (255 - baseColor.R) * tint);
+                g = (int)(baseColor.G + (255 - baseColor.G) * tint);
+                b = (int)(baseColor.B + (255 - baseColor.B) * tint);
+            }
+            
+            // 確保值在 0-255 範圍內
+            r = Math.Max(0, Math.Min(255, r));
+            g = Math.Max(0, Math.Min(255, g));
+            b = Math.Max(0, Math.Min(255, b));
+            
+            return (r, g, b);
         }
 
         [HttpPost("upload")]
@@ -707,15 +540,17 @@ namespace ExcelReaderAPI.Controllers
                 await file.CopyToAsync(stream);
                 stream.Position = 0;
 
-                using var package = new ExcelPackage(stream);
+                using var workbook = new XLWorkbook(stream);
                 
                 // 取得所有工作表名稱
-                excelData.AvailableWorksheets = package.Workbook.Worksheets.Select(ws => ws.Name).ToList();
+                excelData.AvailableWorksheets = workbook.Worksheets.Select(ws => ws.Name).ToList();
                 
-                var worksheet = package.Workbook.Worksheets[0]; // 使用第一個工作表
+                var worksheet = workbook.Worksheet(1); // 使用第一個工作表
                 excelData.WorksheetName = worksheet.Name;
 
-                if (worksheet.Dimension == null)
+                // ClosedXML 使用 RangeUsed 來獲取有效範圍
+                var usedRange = worksheet.RangeUsed();
+                if (usedRange == null)
                 {
                     return BadRequest(new UploadResponse
                     {
@@ -724,22 +559,26 @@ namespace ExcelReaderAPI.Controllers
                     });
                 }
 
-                var rowCount = worksheet.Dimension.Rows;
-                var colCount = worksheet.Dimension.Columns;
+                var rowCount = usedRange.RowCount();
+                var colCount = usedRange.ColumnCount();
 
                 excelData.TotalRows = rowCount;
                 excelData.TotalColumns = colCount;
 
-                // 生成 Excel 欄位標頭 (A, B, C, D...) 包含寬度資訊
+                // 生成 Excel 欄位標頭 (A, B, C, D...) 包含寬度資訊 - 使用 ClosedXML 原生方法
                 var columnHeaders = new List<object>();
-                for (int col = 1; col <= colCount; col++)
+                var firstColumnNumber = usedRange.FirstColumn().ColumnNumber();
+                var lastColumnNumber = usedRange.LastColumn().ColumnNumber();
+                
+                for (int col = firstColumnNumber; col <= lastColumnNumber; col++)
                 {
                     var column = worksheet.Column(col);
-                    var width = column.Width > 0 ? column.Width : worksheet.DefaultColWidth;
+                    var width = column.Width;
+                    var cell = worksheet.Cell(1, col);
                     
                     columnHeaders.Add(new 
                     {
-                        Name = GetColumnName(col),
+                        Name = cell.Address.ColumnLetter, // 使用 ClosedXML 原生的欄位字母
                         Width = width,
                         Index = col
                     });
@@ -747,9 +586,9 @@ namespace ExcelReaderAPI.Controllers
 
                 // 讀取第一行內容作為內容標頭，保留格式信息
                 var contentHeaders = new List<object>();
-                for (int col = 1; col <= colCount; col++)
+                for (int col = firstColumnNumber; col <= lastColumnNumber; col++)
                 {
-                    var headerCell = worksheet.Cells[1, col];
+                    var headerCell = worksheet.Cell(1, col);
                     contentHeaders.Add(CreateCellInfo(headerCell, worksheet));
                 }
                 
@@ -758,12 +597,12 @@ namespace ExcelReaderAPI.Controllers
 
                 // 讀取資料行，保留原始格式（包含Rich Text）
                 var rows = new List<object[]>();
-                for (int row = 1; row <= rowCount; row++) // 從第一行開始（包含所有行）
+                for (int row = 1; row <= rowCount; row++)
                 {
                     var rowData = new List<object>();
-                    for (int col = 1; col <= colCount; col++)
+                    for (int col = firstColumnNumber; col <= lastColumnNumber; col++)
                     {
-                        var cell = worksheet.Cells[row, col];
+                        var cell = worksheet.Cell(row, col);
                         rowData.Add(CreateCellInfo(cell, worksheet));
                     }
                     rows.Add(rowData.ToArray());
@@ -771,18 +610,18 @@ namespace ExcelReaderAPI.Controllers
 
                 excelData.Rows = rows.ToArray();
 
-                _logger.LogInformation($"成功讀取 Excel 檔案: {file.FileName}, 行數: {rowCount}, 欄數: {colCount}");
+                _logger.LogInformation($"成功讀取 Excel 檔案 (ClosedXML): {file.FileName}, 行數: {rowCount}, 欄數: {colCount}");
 
                 return Ok(new UploadResponse
                 {
                     Success = true,
-                    Message = $"成功讀取 Excel 檔案，共 {rowCount - 1} 筆資料",
+                    Message = $"成功讀取 Excel 檔案 (ClosedXML)，共 {rowCount - 1} 筆資料",
                     Data = excelData
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "讀取 Excel 檔案時發生錯誤");
+                _logger.LogError(ex, "讀取 Excel 檔案時發生錯誤 (ClosedXML)");
                 return StatusCode(500, new UploadResponse
                 {
                     Success = false,
@@ -797,7 +636,7 @@ namespace ExcelReaderAPI.Controllers
             // 提供範例資料供前端測試
             var sampleData = new ExcelData
             {
-                FileName = "範例資料.xlsx",
+                FileName = "範例資料-ClosedXML.xlsx",
                 TotalRows = 8,
                 TotalColumns = 5,
                 Headers = new[] { new[] { "姓名", "年齡", "部門", "薪資", "入職日期" } },
@@ -817,7 +656,7 @@ namespace ExcelReaderAPI.Controllers
         }
 
         [HttpPost("upload-worksheet")]
-        public async Task<ActionResult<UploadResponse>> UploadExcelWorksheet(IFormFile file, [FromQuery] string? worksheetName = null, [FromQuery] int worksheetIndex = 0)
+        public async Task<ActionResult<UploadResponse>> UploadExcelWorksheet(IFormFile file, [FromQuery] string? worksheetName = null, [FromQuery] int worksheetIndex = 1)
         {
             try
             {
@@ -845,18 +684,18 @@ namespace ExcelReaderAPI.Controllers
                 await file.CopyToAsync(stream);
                 stream.Position = 0;
 
-                using var package = new ExcelPackage(stream);
+                using var workbook = new XLWorkbook(stream);
                 var excelData = new ExcelData
                 {
                     FileName = file.FileName,
-                    AvailableWorksheets = package.Workbook.Worksheets.Select(ws => ws.Name).ToList()
+                    AvailableWorksheets = workbook.Worksheets.Select(ws => ws.Name).ToList()
                 };
 
                 // 選擇工作表
-                ExcelWorksheet worksheet;
+                IXLWorksheet? worksheet = null;
                 if (!string.IsNullOrEmpty(worksheetName))
                 {
-                    worksheet = package.Workbook.Worksheets[worksheetName];
+                    worksheet = workbook.Worksheets.FirstOrDefault(ws => ws.Name == worksheetName);
                     if (worksheet == null)
                     {
                         return BadRequest(new UploadResponse
@@ -868,7 +707,7 @@ namespace ExcelReaderAPI.Controllers
                 }
                 else
                 {
-                    if (worksheetIndex >= package.Workbook.Worksheets.Count)
+                    if (worksheetIndex > workbook.Worksheets.Count)
                     {
                         return BadRequest(new UploadResponse
                         {
@@ -876,12 +715,13 @@ namespace ExcelReaderAPI.Controllers
                             Message = $"工作表索引 {worksheetIndex} 超出範圍"
                         });
                     }
-                    worksheet = package.Workbook.Worksheets[worksheetIndex];
+                    worksheet = workbook.Worksheet(worksheetIndex);
                 }
 
                 excelData.WorksheetName = worksheet.Name;
 
-                if (worksheet.Dimension == null)
+                var usedRange = worksheet.RangeUsed();
+                if (usedRange == null)
                 {
                     return BadRequest(new UploadResponse
                     {
@@ -890,21 +730,25 @@ namespace ExcelReaderAPI.Controllers
                     });
                 }
 
-                var rowCount = worksheet.Dimension.Rows;
-                var colCount = worksheet.Dimension.Columns;
+                var rowCount = usedRange.RowCount();
+                var colCount = usedRange.ColumnCount();
                 excelData.TotalRows = rowCount;
                 excelData.TotalColumns = colCount;
 
-                // 生成 Excel 欄位標頭 (A, B, C, D...) 包含寬度資訊
+                // 生成 Excel 欄位標頭 (A, B, C, D...) 包含寬度資訊 - 使用 ClosedXML 原生方法
                 var columnHeaders = new List<object>();
-                for (int col = 1; col <= colCount; col++)
+                var firstColumnNumber = usedRange.FirstColumn().ColumnNumber();
+                var lastColumnNumber = usedRange.LastColumn().ColumnNumber();
+                
+                for (int col = firstColumnNumber; col <= lastColumnNumber; col++)
                 {
                     var column = worksheet.Column(col);
-                    var width = column.Width > 0 ? column.Width : worksheet.DefaultColWidth;
+                    var width = column.Width;
+                    var cell = worksheet.Cell(1, col);
                     
                     columnHeaders.Add(new 
                     {
-                        Name = GetColumnName(col),
+                        Name = cell.Address.ColumnLetter, // 使用 ClosedXML 原生的欄位字母
                         Width = width,
                         Index = col
                     });
@@ -912,9 +756,9 @@ namespace ExcelReaderAPI.Controllers
 
                 // 讀取第一行內容作為內容標頭，保留格式信息
                 var contentHeaders = new List<object>();
-                for (int col = 1; col <= colCount; col++)
+                for (int col = firstColumnNumber; col <= lastColumnNumber; col++)
                 {
-                    var headerCell = worksheet.Cells[1, col];
+                    var headerCell = worksheet.Cell(1, col);
                     contentHeaders.Add(CreateCellInfo(headerCell, worksheet));
                 }
                 
@@ -922,12 +766,12 @@ namespace ExcelReaderAPI.Controllers
                 excelData.Headers = new[] { columnHeaders.ToArray(), contentHeaders.ToArray() };
 
                 var rows = new List<object[]>();
-                for (int row = 1; row <= rowCount; row++) // 從第一行開始（包含所有行）
+                for (int row = 1; row <= rowCount; row++)
                 {
                     var rowData = new List<object>();
-                    for (int col = 1; col <= colCount; col++)
+                    for (int col = firstColumnNumber; col <= lastColumnNumber; col++)
                     {
-                        var cell = worksheet.Cells[row, col];
+                        var cell = worksheet.Cell(row, col);
                         rowData.Add(CreateCellInfo(cell, worksheet));
                     }
                     rows.Add(rowData.ToArray());
@@ -937,13 +781,13 @@ namespace ExcelReaderAPI.Controllers
                 return Ok(new UploadResponse
                 {
                     Success = true,
-                    Message = $"成功讀取工作表 '{worksheet.Name}'，共 {rowCount - 1} 筆資料",
+                    Message = $"成功讀取工作表 '{worksheet.Name}' (ClosedXML)，共 {rowCount - 1} 筆資料",
                     Data = excelData
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "讀取 Excel 工作表時發生錯誤");
+                _logger.LogError(ex, "讀取 Excel 工作表時發生錯誤 (ClosedXML)");
                 return StatusCode(500, new UploadResponse
                 {
                     Success = false,
@@ -957,14 +801,52 @@ namespace ExcelReaderAPI.Controllers
         {
             try
             {
-                var fileBytes = ExcelSampleGenerator.GenerateSampleExcel();
+                // 使用 ClosedXML 創建範例 Excel
+                using var workbook = new XLWorkbook();
+                var worksheet = workbook.Worksheets.Add("範例資料");
+
+                // 設定標頭
+                worksheet.Cell("A1").Value = "姓名";
+                worksheet.Cell("B1").Value = "年齡";
+                worksheet.Cell("C1").Value = "部門";
+                worksheet.Cell("D1").Value = "薪資";
+                worksheet.Cell("E1").Value = "入職日期";
+
+                // 設定標頭樣式
+                var headerRange = worksheet.Range("A1:E1");
+                headerRange.Style.Font.Bold = true;
+                headerRange.Style.Fill.BackgroundColor = XLColor.LightBlue;
+
+                // 新增資料並測試 Rich Text
+                worksheet.Cell("A2").Value = "張三";
+                worksheet.Cell("A2").GetRichText().AddText("三").SetFontColor(XLColor.Red); // 測試 Rich Text 顏色
+                
+                worksheet.Cell("B2").Value = 30;
+                worksheet.Cell("C2").Value = "資訊部";
+                worksheet.Cell("D2").Value = 50000;
+                worksheet.Cell("E2").Value = DateTime.Parse("2020-01-15");
+
+                // 更多測試資料
+                worksheet.Cell("A3").Value = "李四";
+                worksheet.Cell("B3").Value = 25;
+                worksheet.Cell("C3").Value = "人事部";
+                worksheet.Cell("D3").Value = 45000;
+                worksheet.Cell("E3").Value = DateTime.Parse("2021-03-20");
+
+                // 自動調整欄寬
+                worksheet.Columns().AdjustToContents();
+
+                using var stream = new MemoryStream();
+                workbook.SaveAs(stream);
+                var fileBytes = stream.ToArray();
+
                 return File(fileBytes, 
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    "範例員工資料.xlsx");
+                    "範例員工資料-ClosedXML.xlsx");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "產生範例Excel檔案時發生錯誤");
+                _logger.LogError(ex, "產生範例Excel檔案時發生錯誤 (ClosedXML)");
                 return StatusCode(500, new UploadResponse
                 {
                     Success = false,
@@ -994,10 +876,11 @@ namespace ExcelReaderAPI.Controllers
                 await file.CopyToAsync(stream);
                 stream.Position = 0;
 
-                using var package = new ExcelPackage(stream);
-                var worksheet = package.Workbook.Worksheets[0];
+                using var workbook = new XLWorkbook(stream);
+                var worksheet = workbook.Worksheet(1);
 
-                if (worksheet.Dimension == null)
+                var usedRange = worksheet.RangeUsed();
+                if (usedRange == null)
                 {
                     return BadRequest("Excel 檔案為空或無有效資料");
                 }
@@ -1008,17 +891,17 @@ namespace ExcelReaderAPI.Controllers
                     WorksheetInfo = new WorksheetInfo
                     {
                         Name = worksheet.Name,
-                        TotalRows = worksheet.Dimension.Rows,
-                        TotalColumns = worksheet.Dimension.Columns,
-                        DefaultColWidth = worksheet.DefaultColWidth,
-                        DefaultRowHeight = worksheet.DefaultRowHeight
+                        TotalRows = usedRange.RowCount(),
+                        TotalColumns = usedRange.ColumnCount(),
+                        DefaultColWidth = 8.43, // ClosedXML 的預設值
+                        DefaultRowHeight = 15
                     },
-                    SampleCells = GetRawCellData(worksheet, Math.Min(5, worksheet.Dimension.Rows), Math.Min(5, worksheet.Dimension.Columns)),
-                    AllWorksheets = package.Workbook.Worksheets.Select(ws => new
+                    SampleCells = GetRawCellDataClosedXML(worksheet, Math.Min(5, usedRange.RowCount()), Math.Min(5, usedRange.ColumnCount())),
+                    AllWorksheets = workbook.Worksheets.Select(ws => new
                     {
                         Name = ws.Name,
-                        Index = ws.Index,
-                        State = ws.Hidden.ToString()
+                        Index = ws.Position,
+                        State = ws.Visibility.ToString()
                     }).Cast<object>().ToList()
                 };
 
@@ -1026,12 +909,12 @@ namespace ExcelReaderAPI.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "讀取 Excel 原始資料時發生錯誤");
+                _logger.LogError(ex, "讀取 Excel 原始資料時發生錯誤 (ClosedXML)");
                 return StatusCode(500, $"讀取檔案時發生錯誤: {ex.Message}");
             }
         }
 
-        private object[,] GetRawCellData(ExcelWorksheet worksheet, int maxRows, int maxCols)
+        private object[,] GetRawCellDataClosedXML(IXLWorksheet worksheet, int maxRows, int maxCols)
         {
             var cells = new object[maxRows, maxCols];
             
@@ -1039,63 +922,59 @@ namespace ExcelReaderAPI.Controllers
             {
                 for (int col = 1; col <= maxCols; col++)
                 {
-                    var cell = worksheet.Cells[row, col];
+                    var cell = worksheet.Cell(row, col);
                     var column = worksheet.Column(col);
                     
                     cells[row - 1, col - 1] = new
                     {
-                        Position = new { Row = row, Column = col, Address = cell.Address },
+                        Position = new { Row = row, Column = col, Address = cell.Address.ToString() },
                         
                         // 基本值和顯示
-                        Value = cell.Value,
-                        Text = cell.Text,
-                        Formula = cell.Formula,
-                        FormulaR1C1 = cell.FormulaR1C1,
+                        Value = cell.Value.IsBlank ? null : cell.Value.ToString(),
+                        Text = cell.GetFormattedString(),
+                        Formula = cell.HasFormula ? cell.FormulaA1 : string.Empty,
+                        FormulaR1C1 = cell.HasFormula ? cell.FormulaR1C1 : string.Empty,
                         
                         // 資料類型
-                        ValueType = cell.Value?.GetType().Name,
+                        ValueType = cell.Value.Type.ToString(),
                         
                         // 格式化
-                        NumberFormat = cell.Style.Numberformat.Format,
-                        NumberFormatId = cell.Style.Numberformat.NumFmtID,
+                        NumberFormat = cell.Style.NumberFormat.Format,
+                        NumberFormatId = cell.Style.NumberFormat.NumberFormatId,
                         
                         // 字體樣式
                         Font = new
                         {
-                            Name = cell.Style.Font.Name,
-                            Size = cell.Style.Font.Size,
+                            Name = cell.Style.Font.FontName,
+                            Size = cell.Style.Font.FontSize,
                             Bold = cell.Style.Font.Bold,
                             Italic = cell.Style.Font.Italic,
-                            Underline = cell.Style.Font.UnderLine,
-                            Strike = cell.Style.Font.Strike,
-                            Color = GetColorFromExcelColor(cell.Style.Font.Color),
-                            ColorTheme = cell.Style.Font.Color.Theme?.ToString(),
-                            ColorTint = cell.Style.Font.Color.Tint,
-                            Charset = cell.Style.Font.Charset,
-                            Scheme = cell.Style.Font.Scheme?.ToString(),
-                            Family = cell.Style.Font.Family
+                            Underline = cell.Style.Font.Underline,
+                            Strike = cell.Style.Font.Strikethrough,
+                            Color = GetColorFromXLColor(cell.Style.Font.FontColor),
+                            Family = cell.Style.Font.FontFamilyNumbering
                         },
                         
                         // 對齊方式
                         Alignment = new
                         {
-                            Horizontal = cell.Style.HorizontalAlignment.ToString(),
-                            Vertical = cell.Style.VerticalAlignment.ToString(),
-                            WrapText = cell.Style.WrapText,
-                            Indent = cell.Style.Indent,
-                            ReadingOrder = cell.Style.ReadingOrder.ToString(),
-                            TextRotation = cell.Style.TextRotation,
-                            ShrinkToFit = cell.Style.ShrinkToFit
+                            Horizontal = cell.Style.Alignment.Horizontal.ToString(),
+                            Vertical = cell.Style.Alignment.Vertical.ToString(),
+                            WrapText = cell.Style.Alignment.WrapText,
+                            Indent = cell.Style.Alignment.Indent,
+                            ReadingOrder = cell.Style.Alignment.ReadingOrder.ToString(),
+                            TextRotation = cell.Style.Alignment.TextRotation,
+                            ShrinkToFit = cell.Style.Alignment.ShrinkToFit
                         },
                         
                         // 邊框
                         Border = new
                         {
-                            Top = new { Style = cell.Style.Border.Top.Style.ToString(), Color = cell.Style.Border.Top.Color.Rgb },
-                            Bottom = new { Style = cell.Style.Border.Bottom.Style.ToString(), Color = cell.Style.Border.Bottom.Color.Rgb },
-                            Left = new { Style = cell.Style.Border.Left.Style.ToString(), Color = cell.Style.Border.Left.Color.Rgb },
-                            Right = new { Style = cell.Style.Border.Right.Style.ToString(), Color = cell.Style.Border.Right.Color.Rgb },
-                            Diagonal = new { Style = cell.Style.Border.Diagonal.Style.ToString(), Color = cell.Style.Border.Diagonal.Color.Rgb },
+                            Top = new { Style = cell.Style.Border.TopBorder.ToString(), Color = GetColorFromXLColor(cell.Style.Border.TopBorderColor) },
+                            Bottom = new { Style = cell.Style.Border.BottomBorder.ToString(), Color = GetColorFromXLColor(cell.Style.Border.BottomBorderColor) },
+                            Left = new { Style = cell.Style.Border.LeftBorder.ToString(), Color = GetColorFromXLColor(cell.Style.Border.LeftBorderColor) },
+                            Right = new { Style = cell.Style.Border.RightBorder.ToString(), Color = GetColorFromXLColor(cell.Style.Border.RightBorderColor) },
+                            Diagonal = new { Style = cell.Style.Border.DiagonalBorder.ToString(), Color = GetColorFromXLColor(cell.Style.Border.DiagonalBorderColor) },
                             DiagonalUp = cell.Style.Border.DiagonalUp,
                             DiagonalDown = cell.Style.Border.DiagonalDown
                         },
@@ -1104,63 +983,55 @@ namespace ExcelReaderAPI.Controllers
                         Fill = new
                         {
                             PatternType = cell.Style.Fill.PatternType.ToString(),
-                            BackgroundColor = cell.Style.Fill.BackgroundColor.Rgb,
-                            PatternColor = cell.Style.Fill.PatternColor.Rgb,
-                            BackgroundColorTheme = cell.Style.Fill.BackgroundColor.Theme?.ToString(),
-                            BackgroundColorTint = cell.Style.Fill.BackgroundColor.Tint
+                            BackgroundColor = GetColorFromXLColor(cell.Style.Fill.BackgroundColor),
+                            PatternColor = GetColorFromXLColor(cell.Style.Fill.PatternColor)
                         },
                         
                         // 尺寸和合併
                         Dimensions = new
                         {
-                            ColumnWidth = column.Width > 0 ? column.Width : worksheet.DefaultColWidth,
+                            ColumnWidth = column.Width,
                             RowHeight = worksheet.Row(row).Height,
-                            IsMerged = cell.Merge,
-                            MergedRangeAddress = cell.Merge ? FindMergedRange(worksheet, row, col)?.Address : null
+                            IsMerged = cell.IsMerged(),
+                            MergedRangeAddress = cell.IsMerged() ? cell.MergedRange().RangeAddress.ToString() : null
                         },
                         
-                        // Rich Text
-                        RichText = cell.IsRichText ? cell.RichText?.Select(rt => new
+                        // Rich Text - ClosedXML 的 Rich Text 處理更準確
+                        RichText = cell.HasRichText ? cell.GetRichText().Select(rt => new
                         {
                             Text = rt.Text,
                             Bold = rt.Bold,
                             Italic = rt.Italic,
-                            UnderLine = rt.UnderLine,
-                            Strike = rt.Strike,
-                            Size = rt.Size,
+                            UnderLine = rt.Underline.ToString(),
+                            Strike = rt.Strikethrough,
+                            Size = rt.FontSize,
                             FontName = rt.FontName,
-                            Color = rt.Color.IsEmpty ? null : $"#{rt.Color.R:X2}{rt.Color.G:X2}{rt.Color.B:X2}",
-                            VerticalAlign = rt.VerticalAlign.ToString()
+                            Color = GetColorFromXLColor(rt.FontColor), // 這裡應該能正確獲取顏色
+                            VerticalAlign = rt.VerticalAlignment.ToString()
                         }).ToList() : null,
                         
                         // 註解
-                        Comment = cell.Comment != null ? new
+                        Comment = cell.HasComment ? new
                         {
-                            Text = cell.Comment.Text,
-                            Author = cell.Comment.Author,
-                            AutoFit = cell.Comment.AutoFit,
-                            Visible = cell.Comment.Visible
+                            Text = cell.GetComment().Text,
+                            Author = cell.GetComment().Author,
+                            Visible = cell.GetComment().Visible
                         } : null,
                         
                         // 超連結
-                        Hyperlink = cell.Hyperlink != null ? new
+                        Hyperlink = cell.HasHyperlink ? new
                         {
-                            AbsoluteUri = cell.Hyperlink.AbsoluteUri,
-                            OriginalString = cell.Hyperlink.OriginalString,
-                            IsAbsoluteUri = cell.Hyperlink.IsAbsoluteUri
+                            ExternalAddress = cell.GetHyperlink().ExternalAddress?.ToString(),
+                            IsExternal = cell.GetHyperlink().IsExternal
                         } : null,
                         
                         // 其他屬性
                         Metadata = new
                         {
-                            HasFormula = !string.IsNullOrEmpty(cell.Formula),
-                            IsRichText = cell.IsRichText,
-                            StyleId = cell.StyleID,
-                            StyleName = cell.StyleName,
-                            Rows = cell.Rows,
-                            Columns = cell.Columns,
-                            Start = new { Row = cell.Start.Row, Column = cell.Start.Column, Address = cell.Start.Address },
-                            End = new { Row = cell.End.Row, Column = cell.End.Column, Address = cell.End.Address }
+                            HasFormula = cell.HasFormula,
+                            IsRichText = cell.HasRichText,
+                            HasComment = cell.HasComment,
+                            HasHyperlink = cell.HasHyperlink
                         }
                     };
                 }
