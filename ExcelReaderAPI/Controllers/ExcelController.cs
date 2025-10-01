@@ -252,7 +252,8 @@ namespace ExcelReaderAPI.Controllers
                 };
 
                 // 基本值和顯示（所有類型都需要）
-                cellInfo.Value = cell.Value;
+                // 安全轉換 cell.Value，避免 EPPlus 內部物件（如 AsCompileResult）造成 JSON 序列化循環引用
+                cellInfo.Value = GetSafeValue(cell.Value);
                 cellInfo.Text = cell.Text;
                 cellInfo.Formula = cell.Formula;
                 cellInfo.FormulaR1C1 = cell.FormulaR1C1;
@@ -387,12 +388,12 @@ namespace ExcelReaderAPI.Controllers
                         cellInfo.Border = CreateDefaultBorderInfo();
                     }
 
-                    // 填充/背景
+                    // 填充/背景 - 使用 GetColorFromExcelColor 避免循環引用
                     cellInfo.Fill = new FillInfo
                     {
                         PatternType = cell.Style.Fill.PatternType.ToString(),
                         BackgroundColor = GetBackgroundColor(cell),
-                        PatternColor = cell.Style.Fill.PatternColor.Rgb,
+                        PatternColor = GetColorFromExcelColor(cell.Style.Fill.PatternColor),
                         BackgroundColorTheme = cell.Style.Fill.BackgroundColor.Theme?.ToString(),
                         BackgroundColorTint = (double?)cell.Style.Fill.BackgroundColor.Tint
                     };
@@ -505,7 +506,59 @@ namespace ExcelReaderAPI.Controllers
             }
 
             // 圖片 - 根據開關決定是否檢查
-            cellInfo.Images = ENABLE_CELL_IMAGES_CHECK ? GetCellImages(worksheet, cell) : null;
+            // 如果是合併儲存格，使用整個合併範圍來檢查圖片
+            ExcelRange rangeToCheck = cell;
+            if (cell.Merge)
+            {
+                var mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
+                if (mergedRange != null)
+                {
+                    rangeToCheck = mergedRange;
+                }
+            }
+            cellInfo.Images = ENABLE_CELL_IMAGES_CHECK ? GetCellImages(worksheet, rangeToCheck) : null;
+            
+            // 如果儲存格包含跨儲存格的圖片，自動設定為合併儲存格
+            if (cellInfo.Images != null && cellInfo.Images.Any())
+            {
+                foreach (var image in cellInfo.Images)
+                {
+                    // 檢查圖片是否跨越多個儲存格
+                    var fromRow = image.AnchorCell?.Row ?? cell.Start.Row;
+                    var fromCol = image.AnchorCell?.Column ?? cell.Start.Column;
+                    
+                    // 從圖片的描述或名稱中提取範圍資訊（如果有的話）
+                    // 或者直接從 worksheet.Drawings 中重新查找圖片的 To 位置
+                    var picture = worksheet.Drawings.FirstOrDefault(d => 
+                        d is OfficeOpenXml.Drawing.ExcelPicture p && p.Name == image.Name) 
+                        as OfficeOpenXml.Drawing.ExcelPicture;
+                    
+                    if (picture != null)
+                    {
+                        int toRow = picture.To?.Row + 1 ?? fromRow;
+                        int toCol = picture.To?.Column + 1 ?? fromCol;
+                        
+                        // 如果圖片跨越多個儲存格，設定合併資訊
+                        if (toRow > fromRow || toCol > fromCol)
+                        {
+                            int rowSpan = toRow - fromRow + 1;
+                            int colSpan = toCol - fromCol + 1;
+                            
+                            _logger.LogInformation($"圖片 '{image.Name}' 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
+                            
+                            // 設定為合併儲存格
+                            cellInfo.Dimensions.IsMerged = true;
+                            cellInfo.Dimensions.IsMainMergedCell = true;
+                            cellInfo.Dimensions.RowSpan = rowSpan;
+                            cellInfo.Dimensions.ColSpan = colSpan;
+                            cellInfo.Dimensions.MergedRangeAddress = 
+                                $"{GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}";
+                            
+                            break; // 只需要設定一次
+                        }
+                    }
+                }
+            }
 
             // 浮動物件（文字框、形狀等） - 暫時停用以避免效能問題
             cellInfo.FloatingObjects = ENABLE_FLOATING_OBJECTS_CHECK ? GetCellFloatingObjects(worksheet, cell) : null;
@@ -628,27 +681,14 @@ namespace ExcelReaderAPI.Controllers
 
                                 _logger.LogInformation($"發現圖片: '{picture.Name ?? "未命名"}' 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
 
-                                // 智慧位置檢查：檢查圖片是否與儲存格有重疊
-                                // 檢查三種情況：
-                                // 1. 圖片起始點在儲存格內
-                                // 2. 圖片結束點在儲存格內
-                                // 3. 圖片完全覆蓋儲存格（起始點在儲存格前，結束點在儲存格後）
-                                bool fromPointInCell = (fromRow >= cellStartRow && fromRow <= cellEndRow &&
-                                                       fromCol >= cellStartCol && fromCol <= cellEndCol);
-                                
-                                bool toPointInCell = (toRow >= cellStartRow && toRow <= cellEndRow &&
-                                                     toCol >= cellStartCol && toCol <= cellEndCol);
-                                
-                                bool cellInPicture = (fromRow <= cellStartRow && toRow >= cellEndRow &&
-                                                     fromCol <= cellStartCol && toCol >= cellEndCol);
-                                
-                                bool shouldInclude = fromPointInCell || toPointInCell || cellInPicture;
+                                // 只在圖片的起始儲存格（From位置）添加圖片
+                                // 避免同一張圖片被重複添加到多個儲存格，造成資料量過大
+                                bool shouldInclude = (fromRow >= cellStartRow && fromRow <= cellEndRow &&
+                                                     fromCol >= cellStartCol && fromCol <= cellEndCol);
                                 
                                 // 記錄詳細的檢查結果
                                 _logger.LogDebug($"圖片 '{picture.Name ?? "未命名"}' 位置檢查: " +
-                                               $"From({fromRow},{fromCol}) in [{cellStartRow},{cellEndRow}] x [{cellStartCol},{cellEndCol}]? {fromPointInCell}, " +
-                                               $"To({toRow},{toCol}) in range? {toPointInCell}, " +
-                                               $"Cell in picture? {cellInPicture}, " +
+                                               $"From({fromRow},{fromCol}) 是否在儲存格 [{cellStartRow},{cellEndRow}] x [{cellStartCol},{cellEndCol}] 內? " +
                                                $"結果: {shouldInclude}");
 
                                 if (shouldInclude)
@@ -2537,6 +2577,45 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
+        /// 從 cell.Value 提取安全的基本類型值，避免 EPPlus 內部物件造成 JSON 序列化循環引用
+        /// </summary>
+        private object? GetSafeValue(object? value)
+        {
+            if (value == null)
+                return null;
+
+            try
+            {
+                // 獲取值的類型
+                var valueType = value.GetType();
+
+                // 如果是基本類型（string, int, double, bool, DateTime 等），直接返回
+                if (valueType.IsPrimitive || value is string || value is DateTime || value is decimal)
+                {
+                    return value;
+                }
+
+                // 如果類型名稱包含 "Compile" 或 "Result"（EPPlus 內部類型），嘗試轉換為字串
+                var typeName = valueType.FullName ?? valueType.Name;
+                if (typeName.Contains("Compile", StringComparison.OrdinalIgnoreCase) || 
+                    typeName.Contains("Result", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning($"檢測到 EPPlus 內部類型 {typeName}，轉換為字串以避免循環引用");
+                    return value.ToString();
+                }
+
+                // 對於其他複雜類型，也轉換為字串
+                _logger.LogDebug($"將複雜類型 {typeName} 轉換為字串");
+                return value.ToString();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"轉換 cell.Value 時發生錯誤: {ex.Message}，返回 null");
+                return null;
+            }
+        }
+
+        /// <summary>
         /// 從 EPPlus ExcelColor 物件提取顏色值
         /// </summary>
         private string? GetColorFromExcelColor(OfficeOpenXml.Style.ExcelColor excelColor)
@@ -2859,6 +2938,25 @@ namespace ExcelReaderAPI.Controllers
 
                 var rowCount = worksheet.Dimension.Rows;
                 var colCount = worksheet.Dimension.Columns;
+
+                // 擴展範圍以包含所有圖片
+                if (worksheet.Drawings != null && worksheet.Drawings.Any())
+                {
+                    foreach (var drawing in worksheet.Drawings)
+                    {
+                        if (drawing is OfficeOpenXml.Drawing.ExcelPicture picture)
+                        {
+                            var picToRow = picture.To.Row + 1;
+                            var picToCol = picture.To.Column + 1;
+                            
+                            if (picToRow > rowCount) rowCount = picToRow;
+                            if (picToCol > colCount) colCount = picToCol;
+                            
+                            _logger.LogDebug($"圖片 '{picture.Name}' 擴展範圍到: Row {picToRow}, Col {picToCol}");
+                        }
+                    }
+                    _logger.LogInformation($"包含圖片後的範圍: {rowCount} 行 x {colCount} 欄");
+                }
 
                 excelData.TotalRows = rowCount;
                 excelData.TotalColumns = colCount;
@@ -3270,24 +3368,24 @@ namespace ExcelReaderAPI.Controllers
                             ShrinkToFit = cell.Style.ShrinkToFit
                         },
                         
-                        // 邊框
+                        // 邊框 - 使用 GetColorFromExcelColor 避免循環引用
                         Border = new
                         {
-                            Top = new { Style = cell.Style.Border.Top.Style.ToString(), Color = cell.Style.Border.Top.Color.Rgb },
-                            Bottom = new { Style = cell.Style.Border.Bottom.Style.ToString(), Color = cell.Style.Border.Bottom.Color.Rgb },
-                            Left = new { Style = cell.Style.Border.Left.Style.ToString(), Color = cell.Style.Border.Left.Color.Rgb },
-                            Right = new { Style = cell.Style.Border.Right.Style.ToString(), Color = cell.Style.Border.Right.Color.Rgb },
-                            Diagonal = new { Style = cell.Style.Border.Diagonal.Style.ToString(), Color = cell.Style.Border.Diagonal.Color.Rgb },
+                            Top = new { Style = cell.Style.Border.Top.Style.ToString(), Color = GetColorFromExcelColor(cell.Style.Border.Top.Color) },
+                            Bottom = new { Style = cell.Style.Border.Bottom.Style.ToString(), Color = GetColorFromExcelColor(cell.Style.Border.Bottom.Color) },
+                            Left = new { Style = cell.Style.Border.Left.Style.ToString(), Color = GetColorFromExcelColor(cell.Style.Border.Left.Color) },
+                            Right = new { Style = cell.Style.Border.Right.Style.ToString(), Color = GetColorFromExcelColor(cell.Style.Border.Right.Color) },
+                            Diagonal = new { Style = cell.Style.Border.Diagonal.Style.ToString(), Color = GetColorFromExcelColor(cell.Style.Border.Diagonal.Color) },
                             DiagonalUp = cell.Style.Border.DiagonalUp,
                             DiagonalDown = cell.Style.Border.DiagonalDown
                         },
                         
-                        // 填充/背景
+                        // 填充/背景 - 使用 GetColorFromExcelColor 避免循環引用
                         Fill = new
                         {
                             PatternType = cell.Style.Fill.PatternType.ToString(),
-                            BackgroundColor = cell.Style.Fill.BackgroundColor.Rgb,
-                            PatternColor = cell.Style.Fill.PatternColor.Rgb,
+                            BackgroundColor = GetColorFromExcelColor(cell.Style.Fill.BackgroundColor),
+                            PatternColor = GetColorFromExcelColor(cell.Style.Fill.PatternColor),
                             BackgroundColorTheme = cell.Style.Fill.BackgroundColor.Theme?.ToString(),
                             BackgroundColorTint = cell.Style.Fill.BackgroundColor.Tint
                         },
