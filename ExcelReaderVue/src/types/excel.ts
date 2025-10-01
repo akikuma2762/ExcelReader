@@ -36,6 +36,26 @@ export interface ImageInfo {
 }
 
 /**
+ * 浮動物件資訊（包含文字框、形狀等）
+ */
+export interface FloatingObjectInfo {
+  name: string
+  description?: string
+  objectType: string // TextBox, Shape, Drawing 等
+  width: number
+  height: number
+  left: number
+  top: number
+  text?: string // 文字內容
+  anchorCell?: CellPosition // 錨點儲存格
+  style?: string // 樣式資訊（顏色、字型等）
+  hyperlinkAddress?: string // 如果有超連結
+  fromCell?: CellPosition // 起始位置
+  toCell?: CellPosition // 結束位置
+  isFloating: boolean // 是否為浮動物件
+}
+
+/**
  * 儲存格位置資訊
  */
 export interface CellPosition {
@@ -200,6 +220,9 @@ export interface ExcelCellInfo {
 
   // 圖片
   images?: ImageInfo[]
+
+  // 浮動物件（文字框、形狀等）
+  floatingObjects?: FloatingObjectInfo[]
 
   // 中繼資料
   metadata: CellMetadata

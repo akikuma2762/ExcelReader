@@ -255,7 +255,7 @@ const headerType = ref<'column' | 'content'>('column') // 默認顯示 Excel 欄
 const selectedImage = ref<ImageInfo | null>(null)
 const showImageModal = ref<boolean>(false)
 
-const API_BASE_URL = 'http://localhost:5282/api' // API伺服器URL
+const API_BASE_URL = 'http://localhost:5280/api' // API伺服器URL
 
 const clearMessage = () => {
   setTimeout(() => {

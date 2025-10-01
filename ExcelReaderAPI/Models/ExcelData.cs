@@ -33,13 +33,36 @@ namespace ExcelReaderAPI.Models
         public long FileSize { get; set; }
         public CellPosition? AnchorCell { get; set; } // 錨點儲存格
         public string? HyperlinkAddress { get; set; } // 如果圖片有超連結
-        
+
         // 縮放相關資訊
         public int? OriginalWidth { get; set; } // 原始寬度
         public int? OriginalHeight { get; set; } // 原始高度
         public double? ScaleFactor { get; set; } // 縮放比例
         public bool IsScaled { get; set; } = false; // 是否經過縮放
         public string? ScaleMethod { get; set; } // 縮放方法描述
+    }
+
+    /// <summary>
+    /// 浮動物件資訊（包含文字框、形狀等）
+    /// </summary>
+    public class FloatingObjectInfo
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public string ObjectType { get; set; } = string.Empty; // TextBox, Shape, Drawing 等
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public double Left { get; set; }
+        public double Top { get; set; }
+        public string? Text { get; set; } // 文字內容
+        public CellPosition? AnchorCell { get; set; } // 錨點儲存格
+        public string? Style { get; set; } // 樣式資訊（顏色、字型等）
+        public string? HyperlinkAddress { get; set; } // 如果有超連結
+
+        // 位置資訊
+        public CellPosition? FromCell { get; set; } // 起始位置
+        public CellPosition? ToCell { get; set; } // 結束位置
+        public bool IsFloating { get; set; } = true; // 是否為浮動物件
     }
 
     /// <summary>
@@ -218,6 +241,9 @@ namespace ExcelReaderAPI.Models
 
         // 圖片
         public List<ImageInfo>? Images { get; set; }
+
+        // 浮動物件（文字框、形狀等）
+        public List<FloatingObjectInfo>? FloatingObjects { get; set; }
 
         // 中繼資料
         public CellMetadata Metadata { get; set; } = new();

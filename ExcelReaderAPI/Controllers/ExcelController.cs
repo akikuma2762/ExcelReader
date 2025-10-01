@@ -15,6 +15,23 @@ namespace ExcelReaderAPI.Controllers
     public class ExcelController : ControllerBase
     {
         private readonly ILogger<ExcelController> _logger;
+        
+        // 安全機制：防止無窮迴圈的常數
+        private const int MAX_SEARCH_OPERATIONS = 1000;
+        private const int MAX_DRAWING_OBJECTS_TO_CHECK = 100;
+        private const int MAX_CELLS_TO_SEARCH = 5000;
+        
+        // 功能開關
+        private const bool ENABLE_FLOATING_OBJECTS_CHECK = false; // 暫時停用浮動物件檢查
+        private const bool ENABLE_CELL_IMAGES_CHECK = true; // 保持圖片檢查啟用
+        
+        // 請求層級的計數器 - 使用 ThreadStatic 避免併發問題
+        [ThreadStatic]
+        private static int _globalDrawingObjectCount = 0;
+        [ThreadStatic]
+        private static int _globalCellSearchCount = 0;
+        [ThreadStatic]
+        private static DateTime _requestStartTime = DateTime.MinValue;
 
         public ExcelController(ILogger<ExcelController> logger)
         {
@@ -72,6 +89,147 @@ namespace ExcelReaderAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// 創建預設字體資訊（避免顏色解析錯誤）
+        /// </summary>
+        private FontInfo CreateDefaultFontInfo()
+        {
+            return new FontInfo
+            {
+                Name = "Calibri",
+                Size = 11,
+                Bold = false,
+                Italic = false,
+                UnderLine = "None",
+                Strike = false,
+                Color = "000000",
+                ColorTheme = null,
+                ColorTint = null,
+                Charset = 1,
+                Scheme = null,
+                Family = 2
+            };
+        }
+
+        /// <summary>
+        /// 創建預設對齊資訊
+        /// </summary>
+        private AlignmentInfo CreateDefaultAlignmentInfo()
+        {
+            return new AlignmentInfo
+            {
+                Horizontal = "General",
+                Vertical = "Bottom",
+                WrapText = false,
+                Indent = 0,
+                ReadingOrder = "ContextDependent",
+                TextRotation = 0,
+                ShrinkToFit = false
+            };
+        }
+
+        /// <summary>
+        /// 創建預設邊框資訊
+        /// </summary>
+        private BorderInfo CreateDefaultBorderInfo()
+        {
+            var defaultBorderStyle = new BorderStyle { Style = "None", Color = null };
+            return new BorderInfo
+            {
+                Top = defaultBorderStyle,
+                Bottom = defaultBorderStyle,
+                Left = defaultBorderStyle,
+                Right = defaultBorderStyle,
+                Diagonal = defaultBorderStyle,
+                DiagonalUp = false,
+                DiagonalDown = false
+            };
+        }
+
+        /// <summary>
+        /// 創建預設填充資訊
+        /// </summary>
+        private FillInfo CreateDefaultFillInfo()
+        {
+            return new FillInfo
+            {
+                PatternType = "None",
+                BackgroundColor = null,
+                PatternColor = null,
+                BackgroundColorTheme = null,
+                BackgroundColorTint = null
+            };
+        }
+
+        /// <summary>
+        /// 智能檢測儲存格的主要內容類型
+        /// </summary>
+        private enum CellContentType
+        {
+            Empty,          // 空儲存格
+            TextOnly,       // 純文字內容
+            ImageOnly,      // 純圖片內容
+            Mixed           // 混合內容
+        }
+
+        /// <summary>
+        /// 檢測儲存格的主要內容類型
+        /// </summary>
+        private CellContentType DetectCellContentType(ExcelRange cell, ExcelWorksheet worksheet)
+        {
+            try
+            {
+                // 檢查是否有文字內容
+                var hasText = !string.IsNullOrEmpty(cell.Text) || !string.IsNullOrEmpty(cell.Formula);
+                
+                // 快速檢查是否有圖片（僅檢查位置，不做詳細處理）
+                var hasImages = false;
+                
+                if (worksheet.Drawings != null && worksheet.Drawings.Any())
+                {
+                    var cellStartRow = cell.Start.Row;
+                    var cellEndRow = cell.End.Row;
+                    var cellStartCol = cell.Start.Column;
+                    var cellEndCol = cell.End.Column;
+
+                    foreach (var drawing in worksheet.Drawings.Take(100)) // 檢查更多物件以確保不會遺漏
+                    {
+                        if (drawing is OfficeOpenXml.Drawing.ExcelPicture picture)
+                        {
+                            if (picture.From != null)
+                            {
+                                var fromRow = picture.From.Row + 1;
+                                var fromCol = picture.From.Column + 1;
+                                
+                                // 精確的位置檢查（與 GetCellImages 一致）
+                                if (fromRow >= cellStartRow && fromRow <= cellEndRow &&
+                                    fromCol >= cellStartCol && fromCol <= cellEndCol)
+                                {
+                                    hasImages = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 判斷內容類型
+                if (!hasText && !hasImages)
+                    return CellContentType.Empty;
+                else if (hasText && !hasImages)
+                    return CellContentType.TextOnly;
+                else if (!hasText && hasImages)
+                    return CellContentType.ImageOnly;
+                else
+                    return CellContentType.Mixed;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug($"檢測儲存格 {cell.Address} 內容類型時發生錯誤: {ex.Message}");
+                return CellContentType.Mixed; // 預設為混合類型以確保完整處理
+            }
+        }
+
         private ExcelCellInfo CreateCellInfo(ExcelRange cell, ExcelWorksheet worksheet)
         {
             if (cell == null || worksheet == null)
@@ -81,7 +239,11 @@ namespace ExcelReaderAPI.Controllers
 
             try
             {
-                // 位置資訊
+                // 智能內容檢測：先判斷儲存格的主要內容類型
+                var contentType = DetectCellContentType(cell, worksheet);
+                _logger.LogDebug($"儲存格 {cell.Address} 內容類型: {contentType}");
+                
+                // 位置資訊（所有類型都需要）
                 cellInfo.Position = new CellPosition
                 {
                     Row = cell.Start.Row,
@@ -89,114 +251,152 @@ namespace ExcelReaderAPI.Controllers
                     Address = cell.Address ?? $"{GetColumnName(cell.Start.Column)}{cell.Start.Row}"
                 };
 
-            // 基本值和顯示
-            cellInfo.Value = cell.Value;
-            cellInfo.Text = cell.Text;
-            cellInfo.Formula = cell.Formula;
-            cellInfo.FormulaR1C1 = cell.FormulaR1C1;
+                // 基本值和顯示（所有類型都需要）
+                cellInfo.Value = cell.Value;
+                cellInfo.Text = cell.Text;
+                cellInfo.Formula = cell.Formula;
+                cellInfo.FormulaR1C1 = cell.FormulaR1C1;
 
-            // 資料類型
-            cellInfo.ValueType = cell.Value?.GetType().Name;
-            if (cell.Value == null)
-            {
-                cellInfo.DataType = "Empty";
-            }
-            else if (cell.Value is DateTime)
-            {
-                cellInfo.DataType = "DateTime";
-            }
-            else if (cell.Value is double || cell.Value is float || cell.Value is decimal)
-            {
-                cellInfo.DataType = "Number";
-            }
-            else if (cell.Value is int || cell.Value is long || cell.Value is short)
-            {
-                cellInfo.DataType = "Integer";
-            }
-            else if (cell.Value is bool)
-            {
-                cellInfo.DataType = "Boolean";
-            }
-            else
-            {
-                cellInfo.DataType = "Text";
-            }
+                // 資料類型（所有類型都需要）
+                cellInfo.ValueType = cell.Value?.GetType().Name;
+                if (cell.Value == null)
+                {
+                    cellInfo.DataType = contentType == CellContentType.ImageOnly ? "Image" : "Empty";
+                }
+                else if (cell.Value is DateTime)
+                {
+                    cellInfo.DataType = "DateTime";
+                }
+                else if (cell.Value is double || cell.Value is float || cell.Value is decimal)
+                {
+                    cellInfo.DataType = "Number";
+                }
+                else if (cell.Value is int || cell.Value is long || cell.Value is short)
+                {
+                    cellInfo.DataType = "Integer";
+                }
+                else if (cell.Value is bool)
+                {
+                    cellInfo.DataType = "Boolean";
+                }
+                else
+                {
+                    cellInfo.DataType = "Text";
+                }
 
-            // 格式化
-            cellInfo.NumberFormat = cell.Style.Numberformat.Format;
-            cellInfo.NumberFormatId = cell.Style.Numberformat.NumFmtID;
+                // 根據內容類型決定是否處理樣式資訊
+                if (contentType == CellContentType.ImageOnly)
+                {
+                    // 純圖片儲存格：使用簡化的樣式處理，避免顏色解析錯誤
+                    _logger.LogDebug($"儲存格 {cell.Address} 檢測為純圖片，使用簡化處理");
+                    
+                    // 提供預設樣式，避免 null 引用
+                    cellInfo.Font = CreateDefaultFontInfo();
+                    cellInfo.Alignment = CreateDefaultAlignmentInfo();
+                    cellInfo.Border = CreateDefaultBorderInfo();
+                    cellInfo.Fill = CreateDefaultFillInfo();
+                    
+                    // 格式化（最小處理）
+                    try
+                    {
+                        cellInfo.NumberFormat = cell.Style.Numberformat.Format;
+                        cellInfo.NumberFormatId = cell.Style.Numberformat.NumFmtID;
+                    }
+                    catch
+                    {
+                        cellInfo.NumberFormat = "";
+                        cellInfo.NumberFormatId = 0;
+                    }
+                }
+                else
+                {
+                    // 包含文字的儲存格：進行完整樣式處理
+                    _logger.LogDebug($"儲存格 {cell.Address} 包含文字內容，進行完整樣式處理");
+                    
+                    // 格式化
+                    cellInfo.NumberFormat = cell.Style.Numberformat.Format;
+                    cellInfo.NumberFormatId = cell.Style.Numberformat.NumFmtID;
 
-            // 字體樣式
-            cellInfo.Font = new FontInfo
-            {
-                Name = cell.Style.Font.Name,
-                Size = cell.Style.Font.Size,
-                Bold = cell.Style.Font.Bold,
-                Italic = cell.Style.Font.Italic,
-                UnderLine = cell.Style.Font.UnderLine.ToString(),
-                Strike = cell.Style.Font.Strike,
-                Color = GetColorFromExcelColor(cell.Style.Font.Color),
-                ColorTheme = cell.Style.Font.Color.Theme?.ToString(),
-                ColorTint = (double?)cell.Style.Font.Color.Tint,
-                Charset = cell.Style.Font.Charset,
-                Scheme = cell.Style.Font.Scheme?.ToString(),
-                Family = cell.Style.Font.Family
-            };
+                    // 字體樣式
+                    cellInfo.Font = new FontInfo
+                    {
+                        Name = cell.Style.Font.Name,
+                        Size = cell.Style.Font.Size,
+                        Bold = cell.Style.Font.Bold,
+                        Italic = cell.Style.Font.Italic,
+                        UnderLine = cell.Style.Font.UnderLine.ToString(),
+                        Strike = cell.Style.Font.Strike,
+                        Color = GetColorFromExcelColor(cell.Style.Font.Color),
+                        ColorTheme = cell.Style.Font.Color.Theme?.ToString(),
+                        ColorTint = (double?)cell.Style.Font.Color.Tint,
+                        Charset = cell.Style.Font.Charset,
+                        Scheme = cell.Style.Font.Scheme?.ToString(),
+                        Family = cell.Style.Font.Family
+                    };
 
-            // 對齊方式
-            cellInfo.Alignment = new AlignmentInfo
-            {
-                Horizontal = cell.Style.HorizontalAlignment.ToString(),
-                Vertical = cell.Style.VerticalAlignment.ToString(),
-                WrapText = cell.Style.WrapText,
-                Indent = cell.Style.Indent,
-                ReadingOrder = cell.Style.ReadingOrder.ToString(),
-                TextRotation = cell.Style.TextRotation,
-                ShrinkToFit = cell.Style.ShrinkToFit
-            };
+                    // 對齊方式
+                    cellInfo.Alignment = new AlignmentInfo
+                    {
+                        Horizontal = cell.Style.HorizontalAlignment.ToString(),
+                        Vertical = cell.Style.VerticalAlignment.ToString(),
+                        WrapText = cell.Style.WrapText,
+                        Indent = cell.Style.Indent,
+                        ReadingOrder = cell.Style.ReadingOrder.ToString(),
+                        TextRotation = cell.Style.TextRotation,
+                        ShrinkToFit = cell.Style.ShrinkToFit
+                    };
 
-            // 邊框
-            // 邊框設定 - 使用增強的顏色處理
-            cellInfo.Border = new BorderInfo
-            {
-                Top = new BorderStyle 
-                { 
-                    Style = cell.Style.Border.Top.Style.ToString(), 
-                    Color = GetColorFromExcelColor(cell.Style.Border.Top.Color)
-                },
-                Bottom = new BorderStyle 
-                { 
-                    Style = cell.Style.Border.Bottom.Style.ToString(), 
-                    Color = GetColorFromExcelColor(cell.Style.Border.Bottom.Color)
-                },
-                Left = new BorderStyle 
-                { 
-                    Style = cell.Style.Border.Left.Style.ToString(), 
-                    Color = GetColorFromExcelColor(cell.Style.Border.Left.Color)
-                },
-                Right = new BorderStyle 
-                { 
-                    Style = cell.Style.Border.Right.Style.ToString(), 
-                    Color = GetColorFromExcelColor(cell.Style.Border.Right.Color)
-                },
-                Diagonal = new BorderStyle 
-                { 
-                    Style = cell.Style.Border.Diagonal.Style.ToString(), 
-                    Color = GetColorFromExcelColor(cell.Style.Border.Diagonal.Color)
-                },
-                DiagonalUp = cell.Style.Border.DiagonalUp,
-                DiagonalDown = cell.Style.Border.DiagonalDown
-            };
+                    // 邊框
+                    // 邊框設定 - 使用增強的顏色處理，添加 null 安全檢查
+                    try
+                    {
+                        cellInfo.Border = new BorderInfo
+                        {
+                            Top = new BorderStyle 
+                            { 
+                                Style = cell.Style.Border?.Top?.Style.ToString() ?? "None", 
+                                Color = cell.Style.Border?.Top?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Top.Color) : null
+                            },
+                            Bottom = new BorderStyle 
+                            { 
+                                Style = cell.Style.Border?.Bottom?.Style.ToString() ?? "None", 
+                                Color = cell.Style.Border?.Bottom?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Bottom.Color) : null
+                            },
+                            Left = new BorderStyle 
+                            { 
+                                Style = cell.Style.Border?.Left?.Style.ToString() ?? "None", 
+                                Color = cell.Style.Border?.Left?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Left.Color) : null
+                            },
+                            Right = new BorderStyle 
+                            { 
+                                Style = cell.Style.Border?.Right?.Style.ToString() ?? "None", 
+                                Color = cell.Style.Border?.Right?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Right.Color) : null
+                            },
+                            Diagonal = new BorderStyle 
+                            { 
+                                Style = cell.Style.Border?.Diagonal?.Style.ToString() ?? "None", 
+                                Color = cell.Style.Border?.Diagonal?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Diagonal.Color) : null
+                            },
+                            DiagonalUp = cell.Style.Border?.DiagonalUp ?? false,
+                            DiagonalDown = cell.Style.Border?.DiagonalDown ?? false
+                        };
+                    }
+                    catch (Exception borderEx)
+                    {
+                        _logger.LogDebug($"儲存格 {cell.Address} 邊框處理時發生錯誤: {borderEx.Message}，使用預設邊框");
+                        cellInfo.Border = CreateDefaultBorderInfo();
+                    }
 
-            // 填充/背景
-            cellInfo.Fill = new FillInfo
-            {
-                PatternType = cell.Style.Fill.PatternType.ToString(),
-                BackgroundColor = GetBackgroundColor(cell),
-                PatternColor = cell.Style.Fill.PatternColor.Rgb,
-                BackgroundColorTheme = cell.Style.Fill.BackgroundColor.Theme?.ToString(),
-                BackgroundColorTint = (double?)cell.Style.Fill.BackgroundColor.Tint
-            };
+                    // 填充/背景
+                    cellInfo.Fill = new FillInfo
+                    {
+                        PatternType = cell.Style.Fill.PatternType.ToString(),
+                        BackgroundColor = GetBackgroundColor(cell),
+                        PatternColor = cell.Style.Fill.PatternColor.Rgb,
+                        BackgroundColorTheme = cell.Style.Fill.BackgroundColor.Theme?.ToString(),
+                        BackgroundColorTint = (double?)cell.Style.Fill.BackgroundColor.Tint
+                    };
+                }
 
             // 尺寸和合併
             var column = worksheet.Column(cell.Start.Column);
@@ -304,8 +504,11 @@ namespace ExcelReaderAPI.Controllers
                 };
             }
 
-            // 圖片
-            cellInfo.Images = GetCellImages(worksheet, cell);
+            // 圖片 - 根據開關決定是否檢查
+            cellInfo.Images = ENABLE_CELL_IMAGES_CHECK ? GetCellImages(worksheet, cell) : null;
+
+            // 浮動物件（文字框、形狀等） - 暫時停用以避免效能問題
+            cellInfo.FloatingObjects = ENABLE_FLOATING_OBJECTS_CHECK ? GetCellFloatingObjects(worksheet, cell) : null;
 
             // 中繼資料
             cellInfo.Metadata = new CellMetadata
@@ -331,27 +534,27 @@ namespace ExcelReaderAPI.Controllers
             };
 
             return cellInfo;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"讀取儲存格 {cell?.Address ?? "未知位置"} 時發生錯誤");
-                
-                // 返回基本的儲存格資訊，避免整個處理中斷
-                return new ExcelCellInfo
-                {
-                    Position = new CellPosition
-                    {
-                        Row = cell?.Start.Row ?? 0,
-                        Column = cell?.Start.Column ?? 0,
-                        Address = cell?.Address ?? "未知"
-                    },
-                    Value = null,
-                    Text = "",
-                    DataType = "Error",
-                    Font = new FontInfo { Color = "000000" }
-                };
-            }
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"讀取儲存格 {cell?.Address ?? "未知位置"} 時發生錯誤");
+            
+            // 返回基本的儲存格資訊，避免整個處理中斷
+            return new ExcelCellInfo
+            {
+                Position = new CellPosition
+                {
+                    Row = cell?.Start.Row ?? 0,
+                    Column = cell?.Start.Column ?? 0,
+                    Address = cell?.Address ?? "未知"
+                },
+                Value = null,
+                Text = "",
+                DataType = "Error",
+                Font = new FontInfo { Color = "000000" }
+            };
+        }
+    }
 
         /// <summary>
         /// 獲取指定儲存格範圍內的所有圖片 (修復版)
@@ -370,13 +573,35 @@ namespace ExcelReaderAPI.Controllers
 
                 _logger.LogDebug($"檢查儲存格 {cell.Address} 的圖片，範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol}");
 
+                // 初始化全域計數器（只在第一次請求時）
+                if (_requestStartTime == DateTime.MinValue)
+                {
+                    _requestStartTime = DateTime.Now;
+                    _globalDrawingObjectCount = 0;
+                    _globalCellSearchCount = 0;
+                }
+
+                // 安全檢查：如果已經檢查太多物件，直接跳過這個儲存格
+                // if (_globalDrawingObjectCount > MAX_DRAWING_OBJECTS_TO_CHECK)
+                // {
+                //     _logger.LogDebug($"儲存格 {cell.Address} 跳過圖片檢查 - 已達到檢查限制");
+                //     return null;
+                // }
+
                 // 1. 檢查所有工作表中的圖片 (採用寬鬆匹配策略)
                 if (worksheet.Drawings != null && worksheet.Drawings.Any())
                 {
-                    _logger.LogInformation($"工作表 '{worksheet.Name}' 包含 {worksheet.Drawings.Count} 個繪圖物件");
+                    _logger.LogDebug($"工作表 '{worksheet.Name}' 包含 {worksheet.Drawings.Count} 個繪圖物件 (已檢查: {_globalDrawingObjectCount})");
                     
                     foreach (var drawing in worksheet.Drawings)
                     {
+                        // 安全檢查：防止處理過多物件
+                        // if (++_globalDrawingObjectCount > MAX_DRAWING_OBJECTS_TO_CHECK)
+                        // {
+                        //     _logger.LogWarning($"已檢查 {MAX_DRAWING_OBJECTS_TO_CHECK} 個繪圖物件，停止進一步檢查以避免效能問題");
+                        //     return images.Any() ? images : null;
+                        // }
+                        
                         try
                         {
                             if (drawing is OfficeOpenXml.Drawing.ExcelPicture picture)
@@ -403,10 +628,28 @@ namespace ExcelReaderAPI.Controllers
 
                                 _logger.LogInformation($"發現圖片: '{picture.Name ?? "未命名"}' 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
 
-                                // 寬鬆的位置檢查 - 如果沒有找到任何圖片，就包含所有圖片
-                                bool shouldInclude = images.Count == 0 || 
-                                                   (fromRow >= cellStartRow - 10 && fromRow <= cellEndRow + 10 &&
-                                                    fromCol >= cellStartCol - 10 && fromCol <= cellEndCol + 10);
+                                // 智慧位置檢查：檢查圖片是否與儲存格有重疊
+                                // 檢查三種情況：
+                                // 1. 圖片起始點在儲存格內
+                                // 2. 圖片結束點在儲存格內
+                                // 3. 圖片完全覆蓋儲存格（起始點在儲存格前，結束點在儲存格後）
+                                bool fromPointInCell = (fromRow >= cellStartRow && fromRow <= cellEndRow &&
+                                                       fromCol >= cellStartCol && fromCol <= cellEndCol);
+                                
+                                bool toPointInCell = (toRow >= cellStartRow && toRow <= cellEndRow &&
+                                                     toCol >= cellStartCol && toCol <= cellEndCol);
+                                
+                                bool cellInPicture = (fromRow <= cellStartRow && toRow >= cellEndRow &&
+                                                     fromCol <= cellStartCol && toCol >= cellEndCol);
+                                
+                                bool shouldInclude = fromPointInCell || toPointInCell || cellInPicture;
+                                
+                                // 記錄詳細的檢查結果
+                                _logger.LogDebug($"圖片 '{picture.Name ?? "未命名"}' 位置檢查: " +
+                                               $"From({fromRow},{fromCol}) in [{cellStartRow},{cellEndRow}] x [{cellStartCol},{cellEndCol}]? {fromPointInCell}, " +
+                                               $"To({toRow},{toCol}) in range? {toPointInCell}, " +
+                                               $"Cell in picture? {cellInPicture}, " +
+                                               $"結果: {shouldInclude}");
 
                                 if (shouldInclude)
                                 {
@@ -530,6 +773,263 @@ namespace ExcelReaderAPI.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"讀取儲存格 {cell.Address} 的圖片時發生錯誤: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 獲取指定儲存格範圍內的所有浮動物件（文字框、形狀等）
+        /// </summary>
+        private List<FloatingObjectInfo>? GetCellFloatingObjects(ExcelWorksheet worksheet, ExcelRange cell)
+        {
+            try
+            {
+                var floatingObjects = new List<FloatingObjectInfo>();
+                
+                // 儲存格的邊界
+                var cellStartRow = cell.Start.Row;
+                var cellEndRow = cell.End.Row;
+                var cellStartCol = cell.Start.Column;
+                var cellEndCol = cell.End.Column;
+
+                _logger.LogDebug($"檢查儲存格 {cell.Address} 的浮動物件，範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol}");
+
+                // 安全檢查：如果已經檢查太多物件，直接跳過這個儲存格
+                if (_globalDrawingObjectCount > MAX_DRAWING_OBJECTS_TO_CHECK)
+                {
+                    _logger.LogDebug($"儲存格 {cell.Address} 跳過浮動物件檢查 - 已達到檢查限制");
+                    return null;
+                }
+
+                // 檢查所有工作表中的繪圖物件（排除圖片）
+                if (worksheet.Drawings != null && worksheet.Drawings.Any())
+                {
+                    _logger.LogDebug($"工作表 '{worksheet.Name}' 包含 {worksheet.Drawings.Count} 個繪圖物件 (已檢查: {_globalDrawingObjectCount})");
+                    
+                    foreach (var drawing in worksheet.Drawings)
+                    {
+                        // 安全檢查：防止處理過多物件
+                        if (++_globalDrawingObjectCount > MAX_DRAWING_OBJECTS_TO_CHECK)
+                        {
+                            _logger.LogWarning($"已檢查 {MAX_DRAWING_OBJECTS_TO_CHECK} 個繪圖物件，停止進一步檢查以避免效能問題");
+                            return floatingObjects.Any() ? floatingObjects : null;
+                        }
+                        
+                        try
+                        {
+                            // 排除圖片，只處理其他類型的繪圖物件
+                            if (drawing is OfficeOpenXml.Drawing.ExcelPicture)
+                            {
+                                continue; // 跳過圖片，已在 GetCellImages 中處理
+                            }
+
+                            // 安全獲取物件位置
+                            int fromRow = 1, fromCol = 1, toRow = 1, toCol = 1;
+                            
+                            if (drawing.From != null)
+                            {
+                                fromRow = drawing.From.Row + 1;
+                                fromCol = drawing.From.Column + 1;
+                            }
+                            
+                            if (drawing.To != null)
+                            {
+                                toRow = drawing.To.Row + 1;
+                                toCol = drawing.To.Column + 1;
+                            }
+                            else
+                            {
+                                toRow = fromRow;
+                                toCol = fromCol;
+                            }
+
+                            _logger.LogInformation($"發現浮動物件: '{drawing.Name ?? "未命名"}' 類型: {drawing.GetType().Name} 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
+
+                            // 位置檢查 - 改為更精確的匹配
+                            bool shouldInclude = (fromRow >= cellStartRow - 3 && fromRow <= cellEndRow + 3 &&
+                                                fromCol >= cellStartCol - 3 && fromCol <= cellEndCol + 3) ||
+                                               (toRow >= cellStartRow - 3 && toRow <= cellEndRow + 3 &&
+                                                toCol >= cellStartCol - 3 && toCol <= cellEndCol + 3);
+
+                            if (shouldInclude)
+                            {
+                                try
+                                {
+                                    var floatingObjectInfo = new FloatingObjectInfo
+                                    {
+                                        Name = drawing.Name ?? $"FloatingObject_{floatingObjects.Count + 1}",
+                                        Description = $"Excel 檔案中的浮動物件 ({drawing.GetType().Name})",
+                                        ObjectType = GetDrawingObjectType(drawing),
+                                        Width = (int)(drawing.To?.Column - drawing.From?.Column ?? 100),
+                                        Height = (int)(drawing.To?.Row - drawing.From?.Row ?? 20),
+                                        Left = (drawing.From?.ColumnOff ?? 0) / 9525.0,
+                                        Top = (drawing.From?.RowOff ?? 0) / 9525.0,
+                                        Text = ExtractTextFromDrawing(drawing),
+                                        AnchorCell = new CellPosition 
+                                        { 
+                                            Row = fromRow, 
+                                            Column = fromCol, 
+                                            Address = $"{GetColumnName(fromCol)}{fromRow}" 
+                                        },
+                                        FromCell = new CellPosition 
+                                        { 
+                                            Row = fromRow, 
+                                            Column = fromCol, 
+                                            Address = $"{GetColumnName(fromCol)}{fromRow}" 
+                                        },
+                                        ToCell = new CellPosition 
+                                        { 
+                                            Row = toRow, 
+                                            Column = toCol, 
+                                            Address = $"{GetColumnName(toCol)}{toRow}" 
+                                        },
+                                        IsFloating = true,
+                                        Style = ExtractStyleFromDrawing(drawing),
+                                        HyperlinkAddress = ExtractHyperlinkFromDrawing(drawing)
+                                    };
+
+                                    floatingObjects.Add(floatingObjectInfo);
+                                    _logger.LogInformation($"成功解析浮動物件: {floatingObjectInfo.Name}, 類型: {floatingObjectInfo.ObjectType}");
+                                }
+                                catch (Exception objEx)
+                                {
+                                    _logger.LogError(objEx, $"處理浮動物件資料時發生錯誤: {objEx.Message}");
+                                }
+                            }
+                        }
+                        catch (Exception drawEx)
+                        {
+                            _logger.LogError(drawEx, $"處理繪圖物件時發生錯誤: {drawEx.Message}");
+                        }
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug($"工作表 '{worksheet.Name}' 沒有繪圖物件");
+                }
+
+                return floatingObjects.Any() ? floatingObjects : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"讀取儲存格 {cell.Address} 的浮動物件時發生錯誤: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 獲取繪圖物件類型
+        /// </summary>
+        private string GetDrawingObjectType(OfficeOpenXml.Drawing.ExcelDrawing drawing)
+        {
+            var typeName = drawing.GetType().Name;
+            
+            return typeName switch
+            {
+                "ExcelShape" => "Shape",
+                "ExcelTextBox" => "TextBox", 
+                "ExcelChart" => "Chart",
+                "ExcelTable" => "Table",
+                "ExcelPicture" => "Picture",
+                _ => typeName.Replace("Excel", "")
+            };
+        }
+
+        /// <summary>
+        /// 從繪圖物件中提取文字內容
+        /// </summary>
+        private string? ExtractTextFromDrawing(OfficeOpenXml.Drawing.ExcelDrawing drawing)
+        {
+            try
+            {
+                // 使用反射嘗試獲取文字屬性
+                var textProperty = drawing.GetType().GetProperty("Text");
+                if (textProperty != null)
+                {
+                    return textProperty.GetValue(drawing)?.ToString();
+                }
+
+                // 嘗試其他可能的文字屬性
+                var richTextProperty = drawing.GetType().GetProperty("RichText");
+                if (richTextProperty != null)
+                {
+                    var richText = richTextProperty.GetValue(drawing);
+                    return richText?.ToString();
+                }
+
+                // 如果是 TextBox，嘗試特殊處理
+                if (drawing.GetType().Name.Contains("TextBox"))
+                {
+                    // EPPlus 中 TextBox 的文字可能存儲在不同的屬性中
+                    var contentProperty = drawing.GetType().GetProperty("Content");
+                    if (contentProperty != null)
+                    {
+                        return contentProperty.GetValue(drawing)?.ToString();
+                    }
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"提取繪圖物件文字時發生錯誤: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 從繪圖物件中提取樣式資訊
+        /// </summary>
+        private string? ExtractStyleFromDrawing(OfficeOpenXml.Drawing.ExcelDrawing drawing)
+        {
+            try
+            {
+                var styles = new List<string>();
+                
+                // 使用反射嘗試獲取樣式屬性
+                var styleProperties = new[] { "Fill", "Border", "Font", "TextAlignment", "Style" };
+                
+                foreach (var propName in styleProperties)
+                {
+                    var property = drawing.GetType().GetProperty(propName);
+                    if (property != null)
+                    {
+                        var value = property.GetValue(drawing);
+                        if (value != null)
+                        {
+                            styles.Add($"{propName}: {value}");
+                        }
+                    }
+                }
+
+                return styles.Any() ? string.Join("; ", styles) : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"提取繪圖物件樣式時發生錯誤: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 從繪圖物件中提取超連結
+        /// </summary>
+        private string? ExtractHyperlinkFromDrawing(OfficeOpenXml.Drawing.ExcelDrawing drawing)
+        {
+            try
+            {
+                var hyperlinkProperty = drawing.GetType().GetProperty("Hyperlink");
+                if (hyperlinkProperty != null)
+                {
+                    var hyperlink = hyperlinkProperty.GetValue(drawing);
+                    return hyperlink?.ToString();
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"提取繪圖物件超連結時發生錯誤: {ex.Message}");
                 return null;
             }
         }
@@ -1167,11 +1667,24 @@ namespace ExcelReaderAPI.Controllers
                 
                 foreach (var worksheet in workbook.Worksheets)
                 {
-                    // 檢查工作表的所有儲存格是否有相關的圖片資料
-                    for (int row = 1; row <= worksheet.Dimension?.End.Row; row++)
+                    // 限制搜索範圍以避免效能問題 - 只檢查前 50 行和前 20 列
+                    var maxRows = Math.Min(worksheet.Dimension?.End.Row ?? 0, 50);
+                    var maxCols = Math.Min(worksheet.Dimension?.End.Column ?? 0, 20);
+                    
+                    _logger.LogDebug($"搜索工作表 {worksheet.Name}，範圍: {maxRows}x{maxCols}");
+                    
+                    // 檢查工作表的有限範圍內是否有相關的圖片資料
+                    for (int row = 1; row <= maxRows; row++)
                     {
-                        for (int col = 1; col <= worksheet.Dimension?.End.Column; col++)
+                        for (int col = 1; col <= maxCols; col++)
                         {
+                            // 安全檢查：防止搜索過多儲存格
+                            if (++_globalCellSearchCount > MAX_CELLS_TO_SEARCH)
+                            {
+                                _logger.LogWarning($"已搜索 {MAX_CELLS_TO_SEARCH} 個儲存格，停止進一步搜索以避免效能問題");
+                                return null;
+                            }
+                            
                             var cell = worksheet.Cells[row, col];
                             
                             // 檢查儲存格公式是否包含我們要找的 ID
@@ -2033,15 +2546,15 @@ namespace ExcelReaderAPI.Controllers
 
             try
             {
-                // 1. 優先使用 RGB 值
+                // 1. 優先使用 RGB 值 (靜默處理錯誤)
                 string? rgbValue = null;
                 try
                 {
                     rgbValue = excelColor.Rgb;
                 }
-                catch (Exception ex)
+                catch
                 {
-                    _logger.LogDebug($"無法存取 RGB 值: {ex.Message}");
+                    // 靜默處理 RGB 存取錯誤
                 }
 
                 if (!string.IsNullOrEmpty(rgbValue))
@@ -2065,26 +2578,49 @@ namespace ExcelReaderAPI.Controllers
                     {
                         return $"{colorValue[0]}{colorValue[0]}{colorValue[1]}{colorValue[1]}{colorValue[2]}{colorValue[2]}";
                     }
+                }else{
+                    return null;
                 }
 
-                // 2. 嘗試使用索引顏色
-                if (excelColor.Indexed >= 0)
+                // 2. 嘗試使用索引顏色 (加強錯誤處理)
+                try
                 {
-                    return GetIndexedColor(excelColor.Indexed);
+                    if (excelColor.Indexed >= 0)
+                    {
+                        return GetIndexedColor(excelColor.Indexed);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug($"無法存取 Indexed 值: {ex.Message}");
                 }
 
-                // 3. 嘗試使用主題顏色
-                if (excelColor.Theme != null)
+                // 3. 嘗試使用主題顏色 (加強錯誤處理)
+                try
                 {
-                    var themeValue = (int)excelColor.Theme;
-                    var tintValue = (double)excelColor.Tint;
-                    return GetThemeColor(themeValue, tintValue);
+                    if (excelColor.Theme != null)
+                    {
+                        var themeValue = (int)excelColor.Theme;
+                        var tintValue = (double)excelColor.Tint;
+                        return GetThemeColor(themeValue, tintValue);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug($"無法存取 Theme 值: {ex.Message}");
                 }
 
-                // 4. 嘗試自動顏色
-                if (excelColor.Auto == true)
+                // 4. 嘗試自動顏色 (加強錯誤處理)
+                try
                 {
-                    return "000000"; // 預設黑色
+                    if (excelColor.Auto == true)
+                    {
+                        return "000000"; // 預設黑色
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug($"無法存取 Auto 值: {ex.Message}");
                 }
                 
                 return null;
@@ -2270,6 +2806,8 @@ namespace ExcelReaderAPI.Controllers
         [HttpPost("upload")]
         public async Task<ActionResult<UploadResponse>> UploadExcel(IFormFile file)
         {
+            _logger.LogInformation($"開始處理檔案上傳: {file?.FileName ?? "null"}, 大小: {file?.Length ?? 0} bytes");
+            
             try
             {
                 if (file == null || file.Length == 0)
@@ -2383,6 +2921,55 @@ namespace ExcelReaderAPI.Controllers
                     Success = false,
                     Message = $"讀取檔案時發生錯誤: {ex.Message}"
                 });
+            }
+        }
+
+        [HttpGet("test-smart-detection")]
+        public ActionResult<object> TestSmartDetection()
+        {
+            try
+            {
+                _logger.LogInformation("開始測試智慧內容檢測功能");
+                
+                // 使用現有的 Excel 檔案進行測試
+                var testFilePath = Path.Combine("d:", "VUE_EPPLUS", "有圖片的excel.xlsx");
+                
+                if (!System.IO.File.Exists(testFilePath))
+                {
+                    return BadRequest($"測試檔案不存在: {testFilePath}");
+                }
+                
+                using var package = new ExcelPackage(new FileInfo(testFilePath));
+                var worksheet = package.Workbook.Worksheets[0];
+                
+                if (worksheet.Dimension == null)
+                {
+                    return BadRequest("Excel 檔案為空");
+                }
+                
+                // 測試 A1 儲存格
+                var cellA1 = worksheet.Cells["A1"];
+                var contentType = DetectCellContentType(cellA1, worksheet);
+                
+                _logger.LogInformation($"A1 儲存格內容類型檢測結果: {contentType}");
+                
+                var cellInfo = CreateCellInfo(cellA1, worksheet);
+                
+                return Ok(new 
+                {
+                    Message = "智慧內容檢測測試完成",
+                    CellAddress = "A1",
+                    DetectedContentType = contentType.ToString(),
+                    CellValue = cellA1.Value,
+                    CellText = cellA1.Text,
+                    HasImages = cellInfo.Images?.Count > 0,
+                    ImageCount = cellInfo.Images?.Count ?? 0
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "測試智慧內容檢測時發生錯誤");
+                return StatusCode(500, $"測試失敗: {ex.Message}");
             }
         }
 
