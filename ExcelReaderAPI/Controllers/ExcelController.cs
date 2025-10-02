@@ -25,6 +25,11 @@ namespace ExcelReaderAPI.Controllers
         private const bool ENABLE_FLOATING_OBJECTS_CHECK = false; // 暫時停用浮動物件檢查
         private const bool ENABLE_CELL_IMAGES_CHECK = true; // 保持圖片檢查啟用
         
+        // 日誌開關 - 用於效能優化
+        private const bool ENABLE_VERBOSE_LOGGING = false; // 詳細日誌 (包含每個儲存格的處理日誌)
+        private const bool ENABLE_DEBUG_LOGGING = false; // 調試日誌 (包含圖片檢查、內容類型檢測等)
+        private const bool ENABLE_PERFORMANCE_LOGGING = true; // 效能日誌 (關鍵節點的耗時統計)
+        
         // 請求層級的計數器 - 使用 ThreadStatic 避免併發問題
         [ThreadStatic]
         private static int _globalDrawingObjectCount = 0;
@@ -91,14 +96,15 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
-        /// 樣式快取 - 避免重複創建相同的樣式物件
+        /// 樣式快取 - 避免重複創建相同的樣式物件 (執行緒安全)
+        /// Phase 3.2: 使用 ConcurrentDictionary 支援並行處理
         /// 複雜度: O(1) 查詢, 大幅減少 GC 壓力
         /// </summary>
         private class StyleCache
         {
-            private readonly Dictionary<string, FontInfo> _fontCache = new();
-            private readonly Dictionary<string, BorderInfo> _borderCache = new();
-            private readonly Dictionary<string, FillInfo> _fillCache = new();
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, FontInfo> _fontCache = new();
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, BorderInfo> _borderCache = new();
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, FillInfo> _fillCache = new();
             
             public string GetFontCacheKey(ExcelRange cell)
             {
@@ -157,11 +163,12 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
-        /// 顏色轉換快取 - 避免重複轉換相同顏色
+        /// 顏色轉換快取 - 避免重複轉換相同顏色 (執行緒安全)
+        /// Phase 3.2: 使用 ConcurrentDictionary 支援並行處理
         /// </summary>
         private class ColorCache
         {
-            private readonly Dictionary<string, string?> _cache = new();
+            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _cache = new();
             
             public string GetCacheKey(OfficeOpenXml.Style.ExcelColor color)
             {
@@ -242,6 +249,46 @@ namespace ExcelReaderAPI.Controllers
             // 設定EPPlus授權（非商業用途）
             ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
         }
+
+        #region 日誌輔助方法 - 統一日誌開關控制
+
+        /// <summary>
+        /// 條件式詳細日誌 (每個儲存格級別的日誌)
+        /// 預設關閉以提升效能,開發時可啟用 ENABLE_VERBOSE_LOGGING
+        /// </summary>
+        private void LogVerbose(string message)
+        {
+            if (ENABLE_VERBOSE_LOGGING)
+            {
+                _logger.LogInformation(message);
+            }
+        }
+
+        /// <summary>
+        /// 條件式調試日誌 (函數調用、狀態檢查等)
+        /// 預設關閉以提升效能,調試時可啟用 ENABLE_DEBUG_LOGGING
+        /// </summary>
+        private void LogDebugConditional(string message)
+        {
+            if (ENABLE_DEBUG_LOGGING)
+            {
+                _logger.LogDebug(message);
+            }
+        }
+
+        /// <summary>
+        /// 效能關鍵點日誌 (索引建立、批次處理完成等)
+        /// 預設啟用,用於監控系統效能
+        /// </summary>
+        private void LogPerformance(string message)
+        {
+            if (ENABLE_PERFORMANCE_LOGGING)
+            {
+                _logger.LogInformation(message);
+            }
+        }
+
+        #endregion
 
         private ExcelRange? FindMergedRange(ExcelWorksheet worksheet, int row, int column)
         {
@@ -2994,8 +3041,8 @@ namespace ExcelReaderAPI.Controllers
         {
             var fill = cell.Style.Fill;
             
-            // 調試：顯示完整的顏色資訊
-            _logger.LogInformation($"Cell {cell.Address} - PatternType: {fill.PatternType}, " +
+            // 使用條件式詳細日誌 (可透過 ENABLE_VERBOSE_LOGGING 開關控制)
+            LogVerbose($"Cell {cell.Address} - PatternType: {fill.PatternType}, " +
                 $"BackgroundColor[Rgb: '{fill.BackgroundColor.Rgb}', Theme: {fill.BackgroundColor.Theme}, Tint: {fill.BackgroundColor.Tint}, Indexed: {fill.BackgroundColor.Indexed}], " +
                 $"PatternColor[Rgb: '{fill.PatternColor.Rgb}', Theme: {fill.PatternColor.Theme}, Tint: {fill.PatternColor.Tint}, Indexed: {fill.PatternColor.Indexed}]");
             
