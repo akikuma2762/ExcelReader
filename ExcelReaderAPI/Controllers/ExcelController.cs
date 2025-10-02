@@ -443,7 +443,7 @@ namespace ExcelReaderAPI.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogDebug($"檢測儲存格 {cell.Address} 內容類型時發生錯誤: {ex.Message}");
+                LogDebugConditional($"檢測儲存格 {cell.Address} 內容類型時發生錯誤: {ex.Message}");
                 return CellContentType.Mixed; // 預設為混合類型以確保完整處理
             }
         }
@@ -501,7 +501,7 @@ namespace ExcelReaderAPI.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogDebug($"檢測儲存格 {cell.Address} 內容類型時發生錯誤: {ex.Message}");
+                LogDebugConditional($"檢測儲存格 {cell.Address} 內容類型時發生錯誤: {ex.Message}");
                 return CellContentType.Mixed; // 預設為混合類型以確保完整處理
             }
         }
@@ -654,7 +654,7 @@ namespace ExcelReaderAPI.Controllers
                     }
                     catch (Exception borderEx)
                     {
-                        _logger.LogDebug($"儲存格 {cell.Address} 邊框處理時發生錯誤: {borderEx.Message}，使用預設邊框");
+                        LogDebugConditional($"儲存格 {cell.Address} 邊框處理時發生錯誤: {borderEx.Message}，使用預設邊框");
                         cellInfo.Border = CreateDefaultBorderInfo();
                     }
 
@@ -1217,7 +1217,7 @@ namespace ExcelReaderAPI.Controllers
                             int rowSpan = toRow - fromRow + 1;
                             int colSpan = toCol - fromCol + 1;
                             
-                            _logger.LogInformation($"圖片 '{image.Name}' 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
+                            LogPerformance($"圖片 '{image.Name}' 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
                             
                             // 設定為合併儲存格
                             cellInfo.Dimensions.IsMerged = true;
@@ -1291,18 +1291,18 @@ namespace ExcelReaderAPI.Controllers
             {
                 var images = new List<ImageInfo>();
                 
-                _logger.LogDebug($"檢查儲存格 {cell.Address} 的圖片 (使用索引)");
+                LogDebugConditional($"檢查儲存格 {cell.Address} 的圖片 (使用索引)");
 
                 // 使用索引快速查詢圖片 - O(1) 複雜度
                 var pictures = imageIndex.GetImagesAtCell(cell.Start.Row, cell.Start.Column);
                 
                 if (pictures == null)
                 {
-                    _logger.LogDebug($"儲存格 {cell.Address} 沒有圖片");
+                    LogDebugConditional($"儲存格 {cell.Address} 沒有圖片");
                     return null;
                 }
 
-                _logger.LogInformation($"儲存格 {cell.Address} 找到 {pictures.Count} 張圖片 (來自索引)");
+                LogVerbose($"儲存格 {cell.Address} 找到 {pictures.Count} 張圖片 (來自索引)");
                 
                 // 處理找到的圖片
                 foreach (var picture in pictures)
@@ -1329,7 +1329,7 @@ namespace ExcelReaderAPI.Controllers
                             toCol = fromCol;
                         }
 
-                        _logger.LogInformation($"處理圖片: '{picture.Name ?? "未命名"}' 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
+                        LogVerbose($"處理圖片: '{picture.Name ?? "未命名"}' 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
 
                         // 獲取圖片原始尺寸
                         var (actualWidth, actualHeight) = GetActualImageDimensions(picture);
@@ -1399,12 +1399,12 @@ namespace ExcelReaderAPI.Controllers
                                     scalePercentage = (scaleX + scaleY) / 2.0;
                                 }
                                 
-                                _logger.LogDebug($"📐 Excel 顯示尺寸 - 像素: {excelDisplayWidth}×{excelDisplayHeight}px, 厘米: {excelWidthCm:F2}×{excelHeightCm:F2}cm, 縮放: {scalePercentage:F1}%");
+                                LogDebugConditional($"📐 Excel 顯示尺寸 - 像素: {excelDisplayWidth}×{excelDisplayHeight}px, 厘米: {excelWidthCm:F2}×{excelHeightCm:F2}cm, 縮放: {scalePercentage:F1}%");
                             }
                         }
                         catch (Exception sizeEx)
                         {
-                            _logger.LogWarning($"計算 Excel 顯示尺寸失敗: {sizeEx.Message}");
+                            LogDebugConditional($"計算 Excel 顯示尺寸失敗: {sizeEx.Message}");
                         }
                         
                         var imageInfo = new ImageInfo
@@ -1436,7 +1436,7 @@ namespace ExcelReaderAPI.Controllers
                         };
 
                         images.Add(imageInfo);
-                        _logger.LogInformation($"成功解析圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes");
+                        LogPerformance($"成功解析圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes");
                     }
                     catch (Exception imgEx)
                     {
@@ -1468,7 +1468,7 @@ namespace ExcelReaderAPI.Controllers
                 var cellStartCol = cell.Start.Column;
                 var cellEndCol = cell.End.Column;
 
-                _logger.LogDebug($"檢查儲存格 {cell.Address} 的圖片，範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol}");
+                LogDebugConditional($"檢查儲存格 {cell.Address} 的圖片，範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol}");
 
                 // 初始化全域計數器（只在第一次請求時）
                 if (_requestStartTime == DateTime.MinValue)
