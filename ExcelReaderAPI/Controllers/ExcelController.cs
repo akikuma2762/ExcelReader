@@ -29,8 +29,6 @@ namespace ExcelReaderAPI.Controllers
         [ThreadStatic]
         private static int _globalDrawingObjectCount = 0;
         [ThreadStatic]
-        private static int _globalCellSearchCount = 0;
-        [ThreadStatic]
         private static DateTime _requestStartTime = DateTime.MinValue;
 
         /// <summary>
@@ -1243,7 +1241,6 @@ namespace ExcelReaderAPI.Controllers
                 {
                     _requestStartTime = DateTime.Now;
                     _globalDrawingObjectCount = 0;
-                    _globalCellSearchCount = 0;
                 }
 
                 // 安全檢查：如果已經檢查太多物件，直接跳過這個儲存格
@@ -1467,48 +1464,7 @@ namespace ExcelReaderAPI.Controllers
                     _logger.LogDebug($"工作表 '{worksheet.Name}' 沒有繪圖物件");
                 }
 
-                // 2. 檢查 DISPIMG 函數
-                if (!string.IsNullOrEmpty(cell.Formula))
-                {
-                    var formula = cell.Formula;
-                    _logger.LogDebug($"檢查儲存格 {cell.Address} 的公式: {formula}");
-                    
-                    if (formula.Contains("DISPIMG") || formula.Contains("_xlfn.DISPIMG"))
-                    {
-                        _logger.LogInformation($"在儲存格 {cell.Address} 中找到 DISPIMG 函數: {formula}");
-                        
-                        var imageId = ExtractImageIdFromFormula(formula);
-                        if (!string.IsNullOrEmpty(imageId))
-                        {
-                            var embeddedImage = FindEmbeddedImageById(worksheet.Workbook, imageId);
-                            if (embeddedImage != null)
-                            {
-                                images.Add(embeddedImage);
-                                _logger.LogInformation($"成功找到 DISPIMG 嵌入圖片: {embeddedImage.Name}");
-                            }
-                            else
-                            {
-                                var placeholderImage = new ImageInfo
-                                {
-                                    Name = $"DISPIMG_{imageId}",
-                                    Description = $"DISPIMG 函數引用的圖片 (ID: {imageId}) - 無法存取實際圖片資料",
-                                    ImageType = "PNG",
-                                    Width = 100,
-                                    Height = 100,
-                                    Left = 0,
-                                    Top = 0,
-                                    Base64Data = GeneratePlaceholderImage(),
-                                    FileName = $"dispimg_{imageId.Replace("ID_", "").Replace("\"", "")}.png",
-                                    FileSize = 0,
-                                    AnchorCell = new CellPosition { Row = cellStartRow, Column = cellStartCol, Address = cell.Address },
-                                    HyperlinkAddress = $"原始公式: {formula}"
-                                };
-                                images.Add(placeholderImage);
-                                _logger.LogInformation($"已創建 DISPIMG 佔位符，ID: {imageId}");
-                            }
-                        }
-                    }
-                }
+                
 
                 return images.Any() ? images : null;
             }
@@ -2198,31 +2154,7 @@ namespace ExcelReaderAPI.Controllers
             return string.Empty;
         }
 
-        /// <summary>
-        /// WPS專用 功能目前無效
-        /// 修正需參考 https://blog.csdn.net/m0_59983333/article/details/138164606
-        /// 從 DISPIMG 公式中提取圖片 ID 
-        /// </summary>
-        private string? ExtractImageIdFromFormula(string formula)
-        {
-            try
-            {
-                // 匹配 DISPIMG("ID_...", 1) 格式
-                var pattern = @"DISPIMG\s*\(\s*""([^""]+)""\s*,\s*\d+\s*\)";
-                var match = System.Text.RegularExpressions.Regex.Match(formula, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                
-                if (match.Success)
-                {
-                    return match.Groups[1].Value;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, $"提取圖片 ID 時發生錯誤，公式: {formula}");
-            }
-            
-            return null;
-        }
+        
 
         /// <summary>
         /// 根據 ID 在工作簿中查找嵌入的圖片 (支援 EPPlus 7.1.0)
@@ -2307,11 +2239,11 @@ namespace ExcelReaderAPI.Controllers
                 _logger.LogInformation($"使用 EPPlus 7.1.0 進階功能查找圖片，ID: {imageId}");
                 
                 // 方法 1: 直接解析 OOXML 包結構 (新增)
-                var ooxmlImage = TryDirectOoxmlImageSearch(workbook, imageId);
-                if (ooxmlImage != null)
-                {
-                    return ooxmlImage;
-                }
+                // var ooxmlImage = TryDirectOoxmlImageSearch(workbook, imageId);
+                // if (ooxmlImage != null)
+                // {
+                //     return ooxmlImage;
+                // }
                 
                 // 方法 2: 嘗試透過 VBA 項目查找圖片
                 var vbaImage = TryFindImageInVbaProject(workbook, imageId);
@@ -2352,367 +2284,22 @@ namespace ExcelReaderAPI.Controllers
             return null;
         }
 
-        /// <summary>
-        /// 直接解析 OOXML 包結構來查找 DISPIMG 圖片
-        /// </summary>
-        private ImageInfo? TryDirectOoxmlImageSearch(ExcelWorkbook workbook, string imageId)
-        {
-            try
-            {
-                _logger.LogInformation($"嘗試直接解析 OOXML ZIP 結構查找 DISPIMG 圖片，ID: {imageId}");
-                
-                // 由於無法直接存取 EPPlus 的底層 Stream，我們改用另一種方法
-                // 透過檢查工作簿的內部結構來尋找圖片資料
-                
-                var cleanImageId = imageId.Replace("ID_", "").Replace("\"", "").ToLowerInvariant();
-                _logger.LogDebug($"清理後的圖片 ID: {cleanImageId}");
-                
-                // 方法 1: 深度搜索所有工作表的內部資料
-                var deepSearchResult = DeepSearchWorksheetInternals(workbook, cleanImageId, imageId);
-                if (deepSearchResult != null)
-                {
-                    return deepSearchResult;
-                }
-                
-                // 方法 2: 嘗試透過 Workbook 的 _package 屬性（反射方式）
-                var reflectionResult = TryReflectionBasedImageSearch(workbook, cleanImageId, imageId);
-                if (reflectionResult != null)
-                {
-                    return reflectionResult;
-                }
-                
-                // 方法 3: 模擬 DISPIMG 功能，檢查是否有相關的圖片快取
-                var cacheResult = TryImageCacheSearch(workbook, cleanImageId, imageId);
-                if (cacheResult != null)
-                {
-                    return cacheResult;
-                }
-                
-                _logger.LogDebug($"OOXML 直接解析未找到圖片，ID: {imageId}");
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"OOXML 直接解析時發生錯誤，ID: {imageId}");
-                return null;
-            }
-        }
+        
+        
 
-        /// <summary>
-        /// 深度搜索工作表內部結構
-        /// </summary>
-        private ImageInfo? DeepSearchWorksheetInternals(ExcelWorkbook workbook, string cleanImageId, string originalImageId)
-        {
-            try
-            {
-                _logger.LogDebug("進行工作表內部深度搜索...");
-                
-                foreach (var worksheet in workbook.Worksheets)
-                {
-                    // 限制搜索範圍以避免效能問題 - 只檢查前 50 行和前 20 列
-                    var maxRows = Math.Min(worksheet.Dimension?.End.Row ?? 0, 50);
-                    var maxCols = Math.Min(worksheet.Dimension?.End.Column ?? 0, 20);
-                    
-                    _logger.LogDebug($"搜索工作表 {worksheet.Name}，範圍: {maxRows}x{maxCols}");
-                    
-                    // 檢查工作表的有限範圍內是否有相關的圖片資料
-                    for (int row = 1; row <= maxRows; row++)
-                    {
-                        for (int col = 1; col <= maxCols; col++)
-                        {
-                            // 安全檢查：防止搜索過多儲存格
-                            if (++_globalCellSearchCount > MAX_CELLS_TO_SEARCH)
-                            {
-                                _logger.LogWarning($"已搜索 {MAX_CELLS_TO_SEARCH} 個儲存格，停止進一步搜索以避免效能問題");
-                                return null;
-                            }
-                            
-                            var cell = worksheet.Cells[row, col];
-                            
-                            // 檢查儲存格公式是否包含我們要找的 ID
-                            if (!string.IsNullOrEmpty(cell.Formula) && 
-                                cell.Formula.Contains(originalImageId))
-                            {
-                                // 檢查這個位置是否有任何隱藏的圖片資料
-                                var hiddenImage = ExtractHiddenImageData(worksheet, row, col, cleanImageId, originalImageId);
-                                if (hiddenImage != null)
-                                {
-                                    return hiddenImage;
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "深度搜索工作表內部時發生錯誤");
-                return null;
-            }
-        }
+        
 
-        /// <summary>
-        /// 嘗試使用反射存取更深層的資料結構
-        /// </summary>
-        private ImageInfo? TryReflectionBasedImageSearch(ExcelWorkbook workbook, string cleanImageId, string originalImageId)
-        {
-            try
-            {
-                _logger.LogDebug("嘗試反射方式存取圖片資料...");
-                
-                // 嘗試透過反射存取 EPPlus 的內部屬性
-                var workbookType = workbook.GetType();
-                var properties = workbookType.GetProperties(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                
-                foreach (var prop in properties)
-                {
-                    if (prop.Name.ToLowerInvariant().Contains("package") || 
-                        prop.Name.ToLowerInvariant().Contains("stream"))
-                    {
-                        _logger.LogDebug($"檢查內部屬性: {prop.Name}");
-                        
-                        try
-                        {
-                            var value = prop.GetValue(workbook);
-                            if (value != null)
-                            {
-                                // 嘗試從這個物件中搜索圖片
-                                var reflectionImage = SearchObjectForImages(value, cleanImageId, originalImageId);
-                                if (reflectionImage != null)
-                                {
-                                    return reflectionImage;
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogDebug(ex, $"存取屬性 {prop.Name} 時發生錯誤");
-                        }
-                    }
-                }
-                
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "反射搜索時發生錯誤");
-                return null;
-            }
-        }
+        
 
-        /// <summary>
-        /// 嘗試從圖片快取中搜索
-        /// </summary>
-        private ImageInfo? TryImageCacheSearch(ExcelWorkbook workbook, string cleanImageId, string originalImageId)
-        {
-            try
-            {
-                _logger.LogDebug("搜索可能的圖片快取...");
-                
-                // 在實際的 DISPIMG 場景中，圖片資料可能被快取在其他地方
-                // 這裡我們嘗試一些替代方法來獲取圖片資料
-                
-                // 方法 1: 檢查是否有任何隱藏的工作表包含圖片資料
-                var hiddenSheetImage = SearchHiddenSheets(workbook, cleanImageId, originalImageId);
-                if (hiddenSheetImage != null)
-                {
-                    return hiddenSheetImage;
-                }
-                
-                // 方法 2: 嘗試創建一個基於 ID 的圖片查找
-                var generatedImage = TryGenerateImageFromId(cleanImageId, originalImageId);
-                if (generatedImage != null)
-                {
-                    return generatedImage;
-                }
-                
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "圖片快取搜索時發生錯誤");
-                return null;
-            }
-        }
+        
 
-        /// <summary>
-        /// 提取隱藏的圖片資料
-        /// </summary>
-        private ImageInfo? ExtractHiddenImageData(ExcelWorksheet worksheet, int row, int col, string cleanImageId, string originalImageId)
-        {
-            try
-            {
-                // 檢查這個位置是否有任何特殊的屬性或註解
-                var cell = worksheet.Cells[row, col];
-                
-                // 檢查註解
-                if (cell.Comment != null)
-                {
-                    var commentText = cell.Comment.Text;
-                    if (!string.IsNullOrEmpty(commentText) && IsBase64String(commentText))
-                    {
-                        _logger.LogInformation($"在儲存格 {cell.Address} 的註解中找到可能的圖片資料");
-                        
-                        return new ImageInfo
-                        {
-                            Name = $"Hidden_DISPIMG_{originalImageId}",
-                            Description = $"從儲存格註解提取的圖片資料",
-                            ImageType = "PNG",
-                            Width = 100,
-                            Height = 100,
-                            Left = 0,
-                            Top = 0,
-                            Base64Data = commentText,
-                            FileName = $"hidden_dispimg_{cleanImageId}.png",
-                            FileSize = Convert.FromBase64String(commentText).Length,
-                            AnchorCell = new CellPosition 
-                            { 
-                                Row = row, 
-                                Column = col, 
-                                Address = cell.Address 
-                            },
-                            HyperlinkAddress = "從儲存格註解提取"
-                        };
-                    }
-                }
-                
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, $"提取隱藏圖片資料時發生錯誤，位置: {row},{col}");
-                return null;
-            }
-        }
+        
 
-        /// <summary>
-        /// 從物件中搜索圖片
-        /// </summary>
-        private ImageInfo? SearchObjectForImages(object obj, string cleanImageId, string originalImageId)
-        {
-            try
-            {
-                // 這是一個簡化的實現，在真實場景中可能需要更複雜的邏輯
-                var objType = obj.GetType();
-                _logger.LogDebug($"搜索物件類型: {objType.Name}");
-                
-                // 如果物件有 ToString 方法且內容包含我們的 ID
-                var stringRepresentation = obj.ToString();
-                if (!string.IsNullOrEmpty(stringRepresentation) && 
-                    (stringRepresentation.Contains(cleanImageId) || stringRepresentation.Contains(originalImageId)))
-                {
-                    _logger.LogDebug($"物件內容匹配 ID: {objType.Name}");
-                    
-                    // 檢查是否可能包含圖片資料
-                    if (IsBase64String(stringRepresentation))
-                    {
-                        return CreateImageFromBase64(stringRepresentation, originalImageId, "反射搜索結果");
-                    }
-                }
-                
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "搜索物件時發生錯誤");
-                return null;
-            }
-        }
+        
 
-        /// <summary>
-        /// 搜索隱藏的工作表
-        /// </summary>
-        private ImageInfo? SearchHiddenSheets(ExcelWorkbook workbook, string cleanImageId, string originalImageId)
-        {
-            try
-            {
-                foreach (var worksheet in workbook.Worksheets)
-                {
-                    if (worksheet.Hidden != eWorkSheetHidden.Visible)
-                    {
-                        _logger.LogDebug($"檢查隱藏工作表: {worksheet.Name}");
-                        
-                        // 在隱藏工作表中搜索圖片
-                        for (int row = 1; row <= Math.Min(worksheet.Dimension?.End.Row ?? 0, 100); row++)
-                        {
-                            for (int col = 1; col <= Math.Min(worksheet.Dimension?.End.Column ?? 0, 20); col++)
-                            {
-                                var cell = worksheet.Cells[row, col];
-                                var cellText = cell.Text;
-                                
-                                if (!string.IsNullOrEmpty(cellText) &&
-                                    (cellText.Contains(cleanImageId) || cellText.Contains(originalImageId)) &&
-                                    IsBase64String(cellText))
-                                {
-                                    _logger.LogInformation($"在隱藏工作表 {worksheet.Name} 的儲存格 {cell.Address} 找到圖片資料");
-                                    
-                                    return CreateImageFromBase64(cellText, originalImageId, $"隱藏工作表 {worksheet.Name}");
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "搜索隱藏工作表時發生錯誤");
-                return null;
-            }
-        }
+        
 
-        /// <summary>
-        /// 嘗試根據 ID 生成圖片
-        /// </summary>
-        private ImageInfo? TryGenerateImageFromId(string cleanImageId, string originalImageId)
-        {
-            try
-            {
-                // 在某些情況下，我們可能需要根據 ID 生成或查找對應的圖片
-                // 這裡是一個佔位符實現，在實際應用中可能需要連接到外部資源
-                
-                _logger.LogDebug($"嘗試根據 ID 生成圖片: {cleanImageId}");
-                
-                // 檢查 ID 是否符合特定的模式，可能包含圖片資源的提示
-                if (cleanImageId.Length >= 32) // 看起來像 GUID
-                {
-                    // 在真實場景中，這裡可能會查詢資料庫、快取或外部 API
-                    _logger.LogDebug("ID 看起來像 GUID，但無法從中直接提取圖片資料");
-                }
-                
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "根據 ID 生成圖片時發生錯誤");
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// 從 Base64 字串創建 ImageInfo
-        /// </summary>
-        private ImageInfo CreateImageFromBase64(string base64Data, string originalImageId, string source)
-        {
-            return new ImageInfo
-            {
-                Name = $"Found_DISPIMG_{originalImageId}",
-                Description = $"從 {source} 找到的 DISPIMG 圖片",
-                ImageType = "PNG",
-                Width = 100,
-                Height = 100,
-                Left = 0,
-                Top = 0,
-                Base64Data = base64Data,
-                FileName = $"found_dispimg_{originalImageId.Replace("ID_", "").ToLowerInvariant()}.png",
-                FileSize = Convert.FromBase64String(base64Data).Length,
-                AnchorCell = new CellPosition { Row = 1, Column = 1, Address = "A1" },
-                HyperlinkAddress = source
-            };
-        }
+       
 
         /// <summary>
         /// 檢查字串是否為有效的 base64
@@ -3034,12 +2621,7 @@ namespace ExcelReaderAPI.Controllers
                         _logger.LogInformation($"  ❌ 無繪圖物件");
                     }
                     
-                    // 檢查工作表中是否有 DISPIMG 公式
-                    var dispimgCount = CountDispimgFormulas(worksheet);
-                    if (dispimgCount > 0)
-                    {
-                        _logger.LogInformation($"  🔍 發現 {dispimgCount} 個 DISPIMG 公式");
-                    }
+                    
                 }
                 
                 // 總體統計
@@ -3055,39 +2637,7 @@ namespace ExcelReaderAPI.Controllers
             }
         }
 
-        /// <summary>
-        /// 計算工作表中 DISPIMG 公式的數量
-        /// </summary>
-        private int CountDispimgFormulas(ExcelWorksheet worksheet)
-        {
-            int count = 0;
-            try
-            {
-                var dimension = worksheet.Dimension;
-                if (dimension != null)
-                {
-                    for (int row = 1; row <= dimension.End.Row; row++)
-                    {
-                        for (int col = 1; col <= dimension.End.Column; col++)
-                        {
-                            var cell = worksheet.Cells[row, col];
-                            if (!string.IsNullOrEmpty(cell.Formula) && 
-                                (cell.Formula.Contains("DISPIMG") || cell.Formula.Contains("_xlfn.DISPIMG")))
-                            {
-                                count++;
-                                var imageId = ExtractImageIdFromFormula(cell.Formula);
-                                _logger.LogInformation($"    📍 {cell.Address}: ID={imageId}, 公式={cell.Formula}");
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "統計 DISPIMG 公式時發生錯誤");
-            }
-            return count;
-        }
+        
 
         /// <summary>
         /// 從 URI 中獲取圖片類型
