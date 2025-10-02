@@ -523,7 +523,20 @@ namespace ExcelReaderAPI.Controllers
 
             try
             {
-                // 智能內容檢測：先判斷儲存格的主要內容類型 (使用索引)
+                // 🔍 調試用中斷點區域 - A30:H39 範圍 (In-Cell 圖片測試)
+                var row = cell.Start.Row;
+                var col = cell.Start.Column;
+                if (row >= 30 && row <= 39 && col >= 1 && col <= 8) // A30:H39
+                {
+                    // ⚠️ 在此設定中斷點以調試 In-Cell 圖片
+                    var debugAddress = cell.Address;
+                    var debugValue = cell.Value;
+                    var debugValueType = cell.Value?.GetType().FullName;
+                    _logger.LogWarning($"🔍 調試點: {debugAddress}, Value Type: {debugValueType}, Value: {debugValue}");
+                    // 👈 在這一行設定中斷點 (F9)
+                }
+                
+                // 智能內容檢測:先判斷儲存格的主要內容類型 (使用索引)
                 var contentType = DetectCellContentType(cell, imageIndex);
                 
                 // 位置資訊（所有類型都需要）
@@ -3081,8 +3094,19 @@ namespace ExcelReaderAPI.Controllers
                     return value;
                 }
 
-                // 如果類型名稱包含 "Compile" 或 "Result"（EPPlus 內部類型），嘗試轉換為字串
                 var typeName = valueType.FullName ?? valueType.Name;
+                
+                // 🚀 特別處理: 檢測 EPPlus 圖片相關類型 (In-Cell Images)
+                if (typeName.Contains("Picture", StringComparison.OrdinalIgnoreCase) ||
+                    typeName.Contains("Image", StringComparison.OrdinalIgnoreCase) ||
+                    typeName.Contains("Drawing", StringComparison.OrdinalIgnoreCase) ||
+                    typeName.Contains("ExcelPicture", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogDebug($"檢測到 In-Cell 圖片類型 {typeName}，返回 null (圖片資訊將在 Images 屬性中提供)");
+                    return null; // 返回 null，圖片資訊會在 cellInfo.Images 中處理
+                }
+
+                // 如果類型名稱包含 "Compile" 或 "Result"（EPPlus 內部類型），嘗試轉換為字串
                 if (typeName.Contains("Compile", StringComparison.OrdinalIgnoreCase) || 
                     typeName.Contains("Result", StringComparison.OrdinalIgnoreCase))
                 {
