@@ -419,7 +419,7 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
-        /// 檢測儲存格的主要內容類型 (使用索引優化版)
+        /// 檢測儲存格的主要內容類型 (使用索引優化版 + EPPlus 8.x In-Cell Picture API)
         /// </summary>
         private CellContentType DetectCellContentType(ExcelRange cell, WorksheetImageIndex? imageIndex)
         {
@@ -428,8 +428,26 @@ namespace ExcelReaderAPI.Controllers
                 // 檢查是否有文字內容
                 var hasText = !string.IsNullOrEmpty(cell.Text) || !string.IsNullOrEmpty(cell.Formula);
                 
-                // 使用索引快速檢查是否有圖片 - O(1) 複雜度
-                var hasImages = imageIndex?.HasImagesAtCell(cell.Start.Row, cell.Start.Column) ?? false;
+                // ⭐ EPPlus 8.x: 優先檢查 In-Cell 圖片
+                bool hasInCellPicture = false;
+                try
+                {
+                    // 只有單一儲存格才能檢查 In-Cell Picture
+                   
+                    
+                        hasInCellPicture = cell.Picture.Exists;
+                    
+                }
+                catch
+                {
+                    // 忽略 Picture API 錯誤
+                }
+                
+                // 使用索引快速檢查是否有浮動圖片 (Drawing Pictures) - O(1) 複雜度
+                var hasDrawingImages = imageIndex?.HasImagesAtCell(cell.Start.Row, cell.Start.Column) ?? false;
+                
+                // 合併判斷：In-Cell 圖片或浮動圖片
+                var hasImages = hasInCellPicture || hasDrawingImages;
 
                 // 判斷內容類型
                 if (!hasText && !hasImages)
@@ -449,7 +467,7 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
-        /// 檢測儲存格的主要內容類型 (舊版本 - 相容性保留)
+        /// 檢測儲存格的主要內容類型 (舊版本 - 相容性保留 + EPPlus 8.x In-Cell Picture API)
         /// </summary>
         private CellContentType DetectCellContentType(ExcelRange cell, ExcelWorksheet worksheet)
         {
@@ -458,8 +476,23 @@ namespace ExcelReaderAPI.Controllers
                 // 檢查是否有文字內容
                 var hasText = !string.IsNullOrEmpty(cell.Text) || !string.IsNullOrEmpty(cell.Formula);
                 
-                // 快速檢查是否有圖片（僅檢查位置，不做詳細處理）
-                var hasImages = false;
+                // ⭐ EPPlus 8.x: 優先檢查 In-Cell 圖片
+                bool hasInCellPicture = false;
+                try
+                {
+                    // 只有單一儲存格才能檢查 In-Cell Picture
+                    if (cell.Start.Row == cell.End.Row && cell.Start.Column == cell.End.Column)
+                    {
+                        hasInCellPicture = cell.Picture.Exists;
+                    }
+                }
+                catch
+                {
+                    // 忽略 Picture API 錯誤
+                }
+                
+                // 快速檢查是否有浮動圖片（僅檢查位置，不做詳細處理）
+                var hasDrawingImages = false;
                 
                 if (worksheet.Drawings != null && worksheet.Drawings.Any())
                 {
@@ -481,13 +514,16 @@ namespace ExcelReaderAPI.Controllers
                                 if (fromRow >= cellStartRow && fromRow <= cellEndRow &&
                                     fromCol >= cellStartCol && fromCol <= cellEndCol)
                                 {
-                                    hasImages = true;
+                                    hasDrawingImages = true;
                                     break;
                                 }
                             }
                         }
                     }
                 }
+
+                // 合併判斷：In-Cell 圖片或浮動圖片
+                var hasImages = hasInCellPicture || hasDrawingImages;
 
                 // 判斷內容類型
                 if (!hasText && !hasImages)
@@ -1307,7 +1343,7 @@ namespace ExcelReaderAPI.Controllers
                 _logger.LogDebug($"檢查儲存格 {cell.Address} 的圖片 (使用 EPPlus 8.x API + 索引)");
 
                 // ⭐ EPPlus 8.x 新 API: 檢查 In-Cell 圖片 (優先使用官方 API)
-                
+               
                     try
                     {
                         // 單一儲存格 - 使用 EPPlus 8.x Picture API
@@ -1321,13 +1357,25 @@ namespace ExcelReaderAPI.Controllers
                                 var imageBytes = cellPicture.GetImageBytes();
                                 var imageType = GetImageTypeFromFileName(cellPicture.FileName);
                                 
+                                // 🔍 計算儲存格/合併範圍的像素尺寸 (In-Cell 圖片會填滿整個儲存格)
+                                // 1. 計算單一儲存格的基準高度
+                                var (cellWidthPixels, singleCellHeightPixels) = GetCellPixelDimensions(worksheet, cell.Start.Row, cell.Start.Column);
+                                
+                                // 2. 計算合併範圍的總高度
+                                int rowSpan = cell.End.Row - cell.Start.Row + 1; // 合併的行數
+                                double totalHeightPixels = singleCellHeightPixels * rowSpan;
+                                
+
+                                
+                               
+                                
                                 var imageInfo = new ImageInfo
                                 {
                                     Name = cellPicture.FileName ?? $"InCellImage_{cell.Address}",
-                                    Description = $"In-Cell 圖片 (EPPlus 8.x) - 儲存格: {cell.Address}, AltText: {cellPicture.AltText ?? "無"}",
+                                    Description = $"In-Cell 圖片 (EPPlus 8.x) - 儲存格: {cell.Address} (跨{rowSpan}行, {cellWidthPixels:F0}×{totalHeightPixels:F0}px), AltText: {cellPicture.AltText ?? "無"}",
                                     ImageType = imageType,
-                                    Width = 0, // In-Cell 圖片會自動調整大小
-                                    Height = 0,
+                                    Width = 0,
+                                    Height = (int)Math.Round(totalHeightPixels),
                                     Left = 0,
                                     Top = 0,
                                     Base64Data = imageBytes != null ? Convert.ToBase64String(imageBytes) : string.Empty,
@@ -1341,11 +1389,18 @@ namespace ExcelReaderAPI.Controllers
                                     },
                                     HyperlinkAddress = $"In-Cell Picture (Type: {cellPicture.PictureType})",
                                     IsInCellPicture = true,
-                                    AltText = cellPicture.AltText
+                                    AltText = cellPicture.AltText,
+                                    OriginalWidth = (int)Math.Round(cellWidthPixels),
+                                    OriginalHeight = (int)Math.Round(totalHeightPixels),
+                                    ExcelWidthCm = 0,
+                                    ExcelHeightCm = 0,
+                                    ScaleFactor = 1.0,
+                                    IsScaled = false,
+                                    ScaleMethod = $"In-Cell 圖片 (自動填滿 {rowSpan} 行合併儲存格)"
                                 };
                                 
                                 images.Add(imageInfo);
-                                _logger.LogInformation($"成功讀取 In-Cell 圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes");
+                                _logger.LogInformation($"成功讀取 In-Cell 圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes, 尺寸: {cellWidthPixels:F0}×{totalHeightPixels:F0}px");
                                 return images.Any() ? images : null;
                             }
                         }
@@ -1354,6 +1409,7 @@ namespace ExcelReaderAPI.Controllers
                     {
                         _logger.LogWarning($"讀取 In-Cell 圖片失敗 (儲存格 {cell.Address}): {inCellEx.Message}");
                     }
+                
                 
 
                 // 使用索引快速查詢浮動圖片 (Drawing Pictures) - O(1) 複雜度
@@ -3616,7 +3672,10 @@ namespace ExcelReaderAPI.Controllers
                             excludedCells.Remove(cellAddress); // 刪去法:處理後移除
                             continue; // 跳過此儲存格,不加入 rowData
                         }
-                        
+                        if(cell.Address == "A30")
+                        {
+                            var debug = 0;
+                        }
                         var cellInfo = CreateCellInfo(cell, worksheet, imageIndex, colorCache, mergedCellIndex);
                         
                         // 如果遇到主合併儲存格,建立待排除集合

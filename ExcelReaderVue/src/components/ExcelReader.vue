@@ -124,8 +124,8 @@
                           :title="`${image.name} - Excel顯示: ${image.width}x${image.height}px, 原始: ${image.originalWidth}x${image.originalHeight}px, ${formatFileSize(image.fileSize)}`"
                           class="cell-image"
                           :style="{
-                            width: image.width + 'px',
-                            height: image.height + 'px'
+                            width: image.width > 0 ? image.width + 'px' : 'auto',
+                            height: image.height > 0 ? image.height + 'px' : 'auto'
                           }"
                           @click="openImageModal(image)"
                           @error="handleImageError"
@@ -138,7 +138,7 @@
                       </div>
                     </div>
                     <!-- 文字內容 -->
-                    <div class="text-content">
+                    <div class="text-content" v-if="!getDisplayValue(cell).includes('#VALUE!')">
                       <span v-if="cell.metadata?.isRichText" v-html="renderRichText(cell)"></span>
                       <span v-else v-html="formatTextWithLineBreaks(getDisplayValue(cell))"></span>
                     </div>
