@@ -90,6 +90,148 @@ namespace ExcelReaderAPI.Controllers
             public int TotalImageCount => _cellImageMap.Values.Sum(list => list.Count);
         }
 
+        /// <summary>
+        /// 樣式快取 - 避免重複創建相同的樣式物件
+        /// 複雜度: O(1) 查詢, 大幅減少 GC 壓力
+        /// </summary>
+        private class StyleCache
+        {
+            private readonly Dictionary<string, FontInfo> _fontCache = new();
+            private readonly Dictionary<string, BorderInfo> _borderCache = new();
+            private readonly Dictionary<string, FillInfo> _fillCache = new();
+            
+            public string GetFontCacheKey(ExcelRange cell)
+            {
+                return GetFontKey(cell.Style.Font, cell.Style.Fill, cell.Style.Font.Color);
+            }
+            
+            public void CacheFont(string key, FontInfo fontInfo)
+            {
+                _fontCache[key] = fontInfo;
+            }
+            
+            public FontInfo? GetCachedFont(string key)
+            {
+                _fontCache.TryGetValue(key, out var fontInfo);
+                return fontInfo;
+            }
+            
+            public FillInfo GetOrCreateFill(ExcelRange cell)
+            {
+                var key = GetFillKey(cell.Style.Fill);
+                if (!_fillCache.TryGetValue(key, out var fillInfo))
+                {
+                    fillInfo = new FillInfo
+                    {
+                        PatternType = cell.Style.Fill.PatternType.ToString(),
+                        BackgroundColor = GetBackgroundColor(cell),
+                        PatternColor = GetColorFromExcelColor(cell.Style.Fill.PatternColor)
+                    };
+                    _fillCache[key] = fillInfo;
+                }
+                return fillInfo;
+            }
+            
+            private string GetFontKey(OfficeOpenXml.Style.ExcelFont font, OfficeOpenXml.Style.ExcelFill fill, OfficeOpenXml.Style.ExcelColor color)
+            {
+                return $"{font.Name}|{font.Size}|{font.Bold}|{font.Italic}|{font.UnderLine}|{font.Strike}|{color.Rgb ?? color.Theme.ToString()}";
+            }
+            
+            private string GetFillKey(OfficeOpenXml.Style.ExcelFill fill)
+            {
+                return $"{fill.PatternType}|{fill.BackgroundColor.Rgb}|{fill.BackgroundColor.Theme}|{fill.PatternColor.Rgb}";
+            }
+            
+            // 這些方法需要訪問 ExcelController 的方法,稍後會調整
+            private string? GetColorFromExcelColor(OfficeOpenXml.Style.ExcelColor excelColor)
+            {
+                // 佔位符,稍後實作
+                return null;
+            }
+            
+            private string? GetBackgroundColor(ExcelRange cell)
+            {
+                // 佔位符,稍後實作
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 顏色轉換快取 - 避免重複轉換相同顏色
+        /// </summary>
+        private class ColorCache
+        {
+            private readonly Dictionary<string, string?> _cache = new();
+            
+            public string GetCacheKey(OfficeOpenXml.Style.ExcelColor color)
+            {
+                if (color == null) return "null";
+                return $"{color.Rgb}|{color.Theme}|{color.Tint}|{color.Indexed}";
+            }
+            
+            public void CacheColor(string key, string? color)
+            {
+                _cache[key] = color;
+            }
+            
+            public bool TryGetCachedColor(string key, out string? color)
+            {
+                return _cache.TryGetValue(key, out color);
+            }
+        }
+
+        /// <summary>
+        /// 合併儲存格索引 - 快速查詢儲存格是否在合併範圍內
+        /// 複雜度: 建立 O(M×C), 查詢 O(1), M=合併範圍數, C=每個範圍的儲存格數
+        /// </summary>
+        private class MergedCellIndex
+        {
+            // Key: "Row_Column", Value: 合併範圍地址 (如 "A1:B2")
+            private readonly Dictionary<string, string> _cellToMergeMap = new();
+            
+            public MergedCellIndex(ExcelWorksheet worksheet)
+            {
+                if (worksheet.MergedCells == null || !worksheet.MergedCells.Any())
+                    return;
+                
+                foreach (var mergeRange in worksheet.MergedCells)
+                {
+                    var range = worksheet.Cells[mergeRange];
+                    
+                    for (int row = range.Start.Row; row <= range.End.Row; row++)
+                    {
+                        for (int col = range.Start.Column; col <= range.End.Column; col++)
+                        {
+                            var key = $"{row}_{col}";
+                            _cellToMergeMap[key] = mergeRange;
+                        }
+                    }
+                }
+            }
+            
+            /// <summary>
+            /// 取得指定儲存格所屬的合併範圍 - O(1) 複雜度
+            /// </summary>
+            public string? GetMergeRange(int row, int col)
+            {
+                _cellToMergeMap.TryGetValue($"{row}_{col}", out var range);
+                return range;
+            }
+            
+            /// <summary>
+            /// 檢查指定儲存格是否在合併範圍內 - O(1) 複雜度
+            /// </summary>
+            public bool IsMergedCell(int row, int col)
+            {
+                return _cellToMergeMap.ContainsKey($"{row}_{col}");
+            }
+            
+            /// <summary>
+            /// 取得總合併範圍數量
+            /// </summary>
+            public int MergeCount => _cellToMergeMap.Values.Distinct().Count();
+        }
+
         public ExcelController(ILogger<ExcelController> logger)
         {
             _logger = logger;
@@ -3213,11 +3355,20 @@ namespace ExcelReaderAPI.Controllers
                 excelData.TotalRows = rowCount;
                 excelData.TotalColumns = colCount;
 
-                // 🚀 效能優化: 建立圖片位置索引 (一次性遍歷所有 Drawings)
+                // 🚀 Phase 1 優化: 建立圖片位置索引 (一次性遍歷所有 Drawings)
                 var imageIndexStopwatch = System.Diagnostics.Stopwatch.StartNew();
                 var imageIndex = new WorksheetImageIndex(worksheet);
                 imageIndexStopwatch.Stop();
-                _logger.LogInformation($"⚡ 圖片索引建立完成: {imageIndex.TotalImageCount} 張圖片, 耗時: {imageIndexStopwatch.ElapsedMilliseconds}ms");
+                
+                // 🚀 Phase 3.1 優化: 建立快取索引 (樣式、顏色、合併儲存格)
+                var cacheStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                var styleCache = new StyleCache();
+                var colorCache = new ColorCache();
+                var mergedCellIndex = new MergedCellIndex(worksheet);
+                cacheStopwatch.Stop();
+                
+                _logger.LogInformation($"⚡ 索引建立完成 - 圖片: {imageIndex.TotalImageCount} 張 ({imageIndexStopwatch.ElapsedMilliseconds}ms), " +
+                    $"合併儲存格: {mergedCellIndex.MergeCount} 個 ({cacheStopwatch.ElapsedMilliseconds}ms)");
 
                 // 生成 Excel 欄位標頭 (A, B, C, D...) 包含寬度資訊
                 var columnHeaders = new List<object>();
