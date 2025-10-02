@@ -443,7 +443,7 @@ namespace ExcelReaderAPI.Controllers
             }
             catch (Exception ex)
             {
-                LogDebugConditional($"檢測儲存格 {cell.Address} 內容類型時發生錯誤: {ex.Message}");
+                _logger.LogDebug($"檢測儲存格 {cell.Address} 內容類型時發生錯誤: {ex.Message}");
                 return CellContentType.Mixed; // 預設為混合類型以確保完整處理
             }
         }
@@ -501,7 +501,7 @@ namespace ExcelReaderAPI.Controllers
             }
             catch (Exception ex)
             {
-                LogDebugConditional($"檢測儲存格 {cell.Address} 內容類型時發生錯誤: {ex.Message}");
+                _logger.LogDebug($"檢測儲存格 {cell.Address} 內容類型時發生錯誤: {ex.Message}");
                 return CellContentType.Mixed; // 預設為混合類型以確保完整處理
             }
         }
@@ -654,7 +654,7 @@ namespace ExcelReaderAPI.Controllers
                     }
                     catch (Exception borderEx)
                     {
-                        LogDebugConditional($"儲存格 {cell.Address} 邊框處理時發生錯誤: {borderEx.Message}，使用預設邊框");
+                        _logger.LogDebug($"儲存格 {cell.Address} 邊框處理時發生錯誤: {borderEx.Message}，使用預設邊框");
                         cellInfo.Border = CreateDefaultBorderInfo();
                     }
 
@@ -1217,7 +1217,7 @@ namespace ExcelReaderAPI.Controllers
                             int rowSpan = toRow - fromRow + 1;
                             int colSpan = toCol - fromCol + 1;
                             
-                            LogPerformance($"圖片 '{image.Name}' 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
+                            _logger.LogInformation($"圖片 '{image.Name}' 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
                             
                             // 設定為合併儲存格
                             cellInfo.Dimensions.IsMerged = true;
@@ -1291,18 +1291,18 @@ namespace ExcelReaderAPI.Controllers
             {
                 var images = new List<ImageInfo>();
                 
-                LogDebugConditional($"檢查儲存格 {cell.Address} 的圖片 (使用索引)");
+                _logger.LogDebug($"檢查儲存格 {cell.Address} 的圖片 (使用索引)");
 
                 // 使用索引快速查詢圖片 - O(1) 複雜度
                 var pictures = imageIndex.GetImagesAtCell(cell.Start.Row, cell.Start.Column);
                 
                 if (pictures == null)
                 {
-                    LogDebugConditional($"儲存格 {cell.Address} 沒有圖片");
+                    _logger.LogDebug($"儲存格 {cell.Address} 沒有圖片");
                     return null;
                 }
 
-                LogVerbose($"儲存格 {cell.Address} 找到 {pictures.Count} 張圖片 (來自索引)");
+                _logger.LogInformation($"儲存格 {cell.Address} 找到 {pictures.Count} 張圖片 (來自索引)");
                 
                 // 處理找到的圖片
                 foreach (var picture in pictures)
@@ -1329,7 +1329,7 @@ namespace ExcelReaderAPI.Controllers
                             toCol = fromCol;
                         }
 
-                        LogVerbose($"處理圖片: '{picture.Name ?? "未命名"}' 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
+                        _logger.LogInformation($"處理圖片: '{picture.Name ?? "未命名"}' 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
 
                         // 獲取圖片原始尺寸
                         var (actualWidth, actualHeight) = GetActualImageDimensions(picture);
@@ -1399,12 +1399,12 @@ namespace ExcelReaderAPI.Controllers
                                     scalePercentage = (scaleX + scaleY) / 2.0;
                                 }
                                 
-                                LogDebugConditional($"📐 Excel 顯示尺寸 - 像素: {excelDisplayWidth}×{excelDisplayHeight}px, 厘米: {excelWidthCm:F2}×{excelHeightCm:F2}cm, 縮放: {scalePercentage:F1}%");
+                                _logger.LogDebug($"📐 Excel 顯示尺寸 - 像素: {excelDisplayWidth}×{excelDisplayHeight}px, 厘米: {excelWidthCm:F2}×{excelHeightCm:F2}cm, 縮放: {scalePercentage:F1}%");
                             }
                         }
                         catch (Exception sizeEx)
                         {
-                            LogDebugConditional($"計算 Excel 顯示尺寸失敗: {sizeEx.Message}");
+                            _logger.LogWarning($"計算 Excel 顯示尺寸失敗: {sizeEx.Message}");
                         }
                         
                         var imageInfo = new ImageInfo
@@ -1436,7 +1436,7 @@ namespace ExcelReaderAPI.Controllers
                         };
 
                         images.Add(imageInfo);
-                        LogPerformance($"成功解析圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes");
+                        _logger.LogInformation($"成功解析圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes");
                     }
                     catch (Exception imgEx)
                     {
@@ -1468,7 +1468,7 @@ namespace ExcelReaderAPI.Controllers
                 var cellStartCol = cell.Start.Column;
                 var cellEndCol = cell.End.Column;
 
-                LogDebugConditional($"檢查儲存格 {cell.Address} 的圖片，範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol}");
+                _logger.LogDebug($"檢查儲存格 {cell.Address} 的圖片，範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol}");
 
                 // 初始化全域計數器（只在第一次請求時）
                 if (_requestStartTime == DateTime.MinValue)
@@ -3513,31 +3513,55 @@ namespace ExcelReaderAPI.Controllers
 
                 // 讀取資料行，保留原始格式（包含Rich Text） - 使用索引 + 快取優化 + 並行處理
                 var processingStopwatch = System.Diagnostics.Stopwatch.StartNew();
-                var rows = new object[rowCount][];
                 
-                // 🚀 Phase 3.2.2: 並行處理 (Row-based Parallel Processing)
-                // 使用 Parallel.For 按行並行處理,充分利用多核 CPU
-                var parallelOptions = new ParallelOptions
+                // 🚀 Phase 3.2.3: 使用刪去法處理合併儲存格 - 建立待排除儲存格集合
+                var excludedCells = new HashSet<string>(); // 儲存格位址 (如 "B2", "C2", ...)
+                
+                var rows = new List<object[]>();
+                for (int row = 1; row <= rowCount; row++)
                 {
-                    MaxDegreeOfParallelism = Environment.ProcessorCount // 使用所有可用 CPU 核心
-                };
-                
-                LogPerformance($"🔥 開始並行處理 {rowCount} 行,使用 {Environment.ProcessorCount} 個 CPU 核心");
-                
-                Parallel.For(1, rowCount + 1, parallelOptions, row =>
-                {
-                    var rowData = new object[colCount];
+                    var rowData = new List<object>();
                     for (int col = 1; col <= colCount; col++)
                     {
                         var cell = worksheet.Cells[row, col];
-                        rowData[col - 1] = CreateCellInfo(cell, worksheet, imageIndex, colorCache, mergedCellIndex); // 使用索引 + 快取
+                        var cellAddress = cell.Address; // 如 "A2", "B2", ...
+                        
+                        // 檢查是否在待排除集合中
+                        if (excludedCells.Contains(cellAddress))
+                        {
+                            excludedCells.Remove(cellAddress); // 刪去法:處理後移除
+                            continue; // 跳過此儲存格,不加入 rowData
+                        }
+                        
+                        var cellInfo = CreateCellInfo(cell, worksheet, imageIndex, colorCache, mergedCellIndex);
+                        
+                        // 如果遇到主合併儲存格,建立待排除集合
+                        if (cellInfo.Dimensions?.MergedRangeAddress != null)
+                        {
+                            var mergedRange = worksheet.Cells[cellInfo.Dimensions.MergedRangeAddress];
+                            
+                            // 建立該合併範圍內所有儲存格的位址(除了主儲存格)
+                            for (int r = mergedRange.Start.Row; r <= mergedRange.End.Row; r++)
+                            {
+                                for (int c = mergedRange.Start.Column; c <= mergedRange.End.Column; c++)
+                                {
+                                    var addr = new ExcelCellAddress(r, c).Address;
+                                    if (addr != cellAddress) // 排除主儲存格本身
+                                    {
+                                        excludedCells.Add(addr);
+                                    }
+                                }
+                            }
+                        }
+                        
+                        rowData.Add(cellInfo);
                     }
-                    rows[row - 1] = rowData;
-                });
+                    rows.Add(rowData.ToArray());
+                }
                 
                 processingStopwatch.Stop();
 
-                excelData.Rows = rows;
+                excelData.Rows = rows.ToArray();
 
                 LogPerformance($"✅ 成功讀取 Excel 檔案: {file.FileName}, 行數: {rowCount}, 欄數: {colCount}, 處理耗時: {processingStopwatch.ElapsedMilliseconds}ms, 平均每行: {processingStopwatch.ElapsedMilliseconds / (double)rowCount:F2}ms");
 
@@ -3631,142 +3655,6 @@ namespace ExcelReaderAPI.Controllers
             };
 
             return Ok(sampleData);
-        }
-
-        [HttpPost("upload-worksheet")]
-        public async Task<ActionResult<UploadResponse>> UploadExcelWorksheet(IFormFile file, [FromQuery] string? worksheetName = null, [FromQuery] int worksheetIndex = 0)
-        {
-            try
-            {
-                if (file == null || file.Length == 0)
-                {
-                    return BadRequest(new UploadResponse
-                    {
-                        Success = false,
-                        Message = "未選擇檔案或檔案為空"
-                    });
-                }
-
-                var allowedExtensions = new[] { ".xlsx", ".xls" };
-                var fileExtension = Path.GetExtension(file.FileName).ToLower();
-                if (!allowedExtensions.Contains(fileExtension))
-                {
-                    return BadRequest(new UploadResponse
-                    {
-                        Success = false,
-                        Message = "僅支援 Excel 檔案格式 (.xlsx, .xls)"
-                    });
-                }
-
-                using var stream = new MemoryStream();
-                await file.CopyToAsync(stream);
-                stream.Position = 0;
-
-                using var package = new ExcelPackage(stream);
-                var excelData = new ExcelData
-                {
-                    FileName = file.FileName,
-                    AvailableWorksheets = package.Workbook.Worksheets.Select(ws => ws.Name).ToList()
-                };
-
-                // 選擇工作表
-                ExcelWorksheet worksheet;
-                if (!string.IsNullOrEmpty(worksheetName))
-                {
-                    worksheet = package.Workbook.Worksheets[worksheetName];
-                    if (worksheet == null)
-                    {
-                        return BadRequest(new UploadResponse
-                        {
-                            Success = false,
-                            Message = $"找不到名為 '{worksheetName}' 的工作表"
-                        });
-                    }
-                }
-                else
-                {
-                    if (worksheetIndex >= package.Workbook.Worksheets.Count)
-                    {
-                        return BadRequest(new UploadResponse
-                        {
-                            Success = false,
-                            Message = $"工作表索引 {worksheetIndex} 超出範圍"
-                        });
-                    }
-                    worksheet = package.Workbook.Worksheets[worksheetIndex];
-                }
-
-                excelData.WorksheetName = worksheet.Name;
-
-                if (worksheet.Dimension == null)
-                {
-                    return BadRequest(new UploadResponse
-                    {
-                        Success = false,
-                        Message = "選擇的工作表為空或無有效資料"
-                    });
-                }
-
-                var rowCount = worksheet.Dimension.Rows;
-                var colCount = worksheet.Dimension.Columns;
-                excelData.TotalRows = rowCount;
-                excelData.TotalColumns = colCount;
-
-                // 生成 Excel 欄位標頭 (A, B, C, D...) 包含寬度資訊
-                var columnHeaders = new List<object>();
-                for (int col = 1; col <= colCount; col++)
-                {
-                    var column = worksheet.Column(col);
-                    var width = column.Width > 0 ? column.Width : worksheet.DefaultColWidth;
-                    
-                    columnHeaders.Add(new 
-                    {
-                        Name = GetColumnName(col),
-                        Width = width,
-                        Index = col
-                    });
-                }
-
-                // 讀取第一行內容作為內容標頭，保留格式信息
-                var contentHeaders = new List<object>();
-                for (int col = 1; col <= colCount; col++)
-                {
-                    var headerCell = worksheet.Cells[1, col];
-                    contentHeaders.Add(CreateCellInfo(headerCell, worksheet));
-                }
-                
-                // 提供兩種標頭：Excel 欄位標頭和內容標頭
-                excelData.Headers = new[] { columnHeaders.ToArray(), contentHeaders.ToArray() };
-
-                var rows = new List<object[]>();
-                for (int row = 1; row <= rowCount; row++) // 從第一行開始（包含所有行）
-                {
-                    var rowData = new List<object>();
-                    for (int col = 1; col <= colCount; col++)
-                    {
-                        var cell = worksheet.Cells[row, col];
-                        rowData.Add(CreateCellInfo(cell, worksheet));
-                    }
-                    rows.Add(rowData.ToArray());
-                }
-                excelData.Rows = rows.ToArray();
-
-                return Ok(new UploadResponse
-                {
-                    Success = true,
-                    Message = $"成功讀取工作表 '{worksheet.Name}'，共 {rowCount - 1} 筆資料",
-                    Data = excelData
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "讀取 Excel 工作表時發生錯誤");
-                return StatusCode(500, new UploadResponse
-                {
-                    Success = false,
-                    Message = $"讀取檔案時發生錯誤: {ex.Message}"
-                });
-            }
         }
 
         [HttpGet("download-sample")]
