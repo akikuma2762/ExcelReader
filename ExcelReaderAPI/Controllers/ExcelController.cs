@@ -460,9 +460,14 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
-        /// 創建儲存格資訊 (使用索引優化版)
+        /// 創建儲存格資訊 (使用索引優化版 + 快取)
         /// </summary>
-        private ExcelCellInfo CreateCellInfo(ExcelRange cell, ExcelWorksheet worksheet, WorksheetImageIndex imageIndex)
+        private ExcelCellInfo CreateCellInfo(
+            ExcelRange cell, 
+            ExcelWorksheet worksheet, 
+            WorksheetImageIndex imageIndex,
+            ColorCache? colorCache = null,
+            MergedCellIndex? mergedCellIndex = null)
         {
             if (cell == null || worksheet == null)
                 throw new ArgumentNullException("Cell or worksheet cannot be null");
@@ -473,7 +478,6 @@ namespace ExcelReaderAPI.Controllers
             {
                 // 智能內容檢測：先判斷儲存格的主要內容類型 (使用索引)
                 var contentType = DetectCellContentType(cell, imageIndex);
-                _logger.LogDebug($"儲存格 {cell.Address} 內容類型: {contentType} (使用索引)");
                 
                 // 位置資訊（所有類型都需要）
                 cellInfo.Position = new CellPosition
@@ -537,7 +541,7 @@ namespace ExcelReaderAPI.Controllers
                 }
                 else
                 {
-                    // 完整樣式處理 (與原版相同)
+                    // 完整樣式處理 (使用快取)
                     cellInfo.NumberFormat = cell.Style.Numberformat.Format;
                     cellInfo.NumberFormatId = cell.Style.Numberformat.NumFmtID;
 
@@ -549,7 +553,7 @@ namespace ExcelReaderAPI.Controllers
                         Italic = cell.Style.Font.Italic,
                         UnderLine = cell.Style.Font.UnderLine.ToString(),
                         Strike = cell.Style.Font.Strike,
-                        Color = GetColorFromExcelColor(cell.Style.Font.Color),
+                        Color = GetColorFromExcelColor(cell.Style.Font.Color, colorCache),
                         ColorTheme = cell.Style.Font.Color.Theme?.ToString(),
                         ColorTint = (double?)cell.Style.Font.Color.Tint,
                         Charset = cell.Style.Font.Charset,
@@ -575,27 +579,27 @@ namespace ExcelReaderAPI.Controllers
                             Top = new BorderStyle 
                             { 
                                 Style = cell.Style.Border?.Top?.Style.ToString() ?? "None", 
-                                Color = cell.Style.Border?.Top?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Top.Color) : null
+                                Color = cell.Style.Border?.Top?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Top.Color, colorCache) : null
                             },
                             Bottom = new BorderStyle 
                             { 
                                 Style = cell.Style.Border?.Bottom?.Style.ToString() ?? "None", 
-                                Color = cell.Style.Border?.Bottom?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Bottom.Color) : null
+                                Color = cell.Style.Border?.Bottom?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Bottom.Color, colorCache) : null
                             },
                             Left = new BorderStyle 
                             { 
                                 Style = cell.Style.Border?.Left?.Style.ToString() ?? "None", 
-                                Color = cell.Style.Border?.Left?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Left.Color) : null
+                                Color = cell.Style.Border?.Left?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Left.Color, colorCache) : null
                             },
                             Right = new BorderStyle 
                             { 
                                 Style = cell.Style.Border?.Right?.Style.ToString() ?? "None", 
-                                Color = cell.Style.Border?.Right?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Right.Color) : null
+                                Color = cell.Style.Border?.Right?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Right.Color, colorCache) : null
                             },
                             Diagonal = new BorderStyle 
                             { 
                                 Style = cell.Style.Border?.Diagonal?.Style.ToString() ?? "None", 
-                                Color = cell.Style.Border?.Diagonal?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Diagonal.Color) : null
+                                Color = cell.Style.Border?.Diagonal?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Diagonal.Color, colorCache) : null
                             },
                             DiagonalUp = cell.Style.Border?.DiagonalUp ?? false,
                             DiagonalDown = cell.Style.Border?.DiagonalDown ?? false
@@ -611,7 +615,7 @@ namespace ExcelReaderAPI.Controllers
                     {
                         PatternType = cell.Style.Fill.PatternType.ToString(),
                         BackgroundColor = GetBackgroundColor(cell),
-                        PatternColor = GetColorFromExcelColor(cell.Style.Fill.PatternColor),
+                        PatternColor = GetColorFromExcelColor(cell.Style.Fill.PatternColor, colorCache),
                         BackgroundColorTheme = cell.Style.Fill.BackgroundColor.Theme?.ToString(),
                         BackgroundColorTint = (double?)cell.Style.Fill.BackgroundColor.Tint
                     };
@@ -626,10 +630,26 @@ namespace ExcelReaderAPI.Controllers
                     IsMerged = cell.Merge
                 };
 
-                // 合併儲存格處理
+                // 合併儲存格處理 (使用快取索引)
                 if (cell.Merge)
                 {
-                    var mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
+                    ExcelRange? mergedRange = null;
+                    
+                    // 優先使用索引查詢
+                    if (mergedCellIndex != null)
+                    {
+                        var mergeAddress = mergedCellIndex.GetMergeRange(cell.Start.Row, cell.Start.Column);
+                        if (mergeAddress != null)
+                        {
+                            mergedRange = worksheet.Cells[mergeAddress];
+                        }
+                    }
+                    else
+                    {
+                        // 回退到原始查詢方式
+                        mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
+                    }
+                    
                     if (mergedRange != null)
                     {
                         cellInfo.Dimensions.MergedRangeAddress = mergedRange.Address;
@@ -715,7 +735,22 @@ namespace ExcelReaderAPI.Controllers
                 ExcelRange rangeToCheck = cell;
                 if (cell.Merge)
                 {
-                    var mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
+                    ExcelRange? mergedRange = null;
+                    
+                    // 優先使用索引查詢
+                    if (mergedCellIndex != null)
+                    {
+                        var mergeAddress = mergedCellIndex.GetMergeRange(cell.Start.Row, cell.Start.Column);
+                        if (mergeAddress != null)
+                        {
+                            mergedRange = worksheet.Cells[mergeAddress];
+                        }
+                    }
+                    else
+                    {
+                        mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
+                    }
+                    
                     if (mergedRange != null)
                     {
                         rangeToCheck = mergedRange;
@@ -809,9 +844,19 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
-        /// 創建儲存格資訊 (舊版本 - 相容性保留)
+        /// 創建儲存格資訊 (舊版本 - 相容性保留,內部使用索引優化版本)
         /// </summary>
         private ExcelCellInfo CreateCellInfo(ExcelRange cell, ExcelWorksheet worksheet)
+        {
+            // 為了保持向後相容,創建臨時索引並調用優化版本
+            var imageIndex = new WorksheetImageIndex(worksheet);
+            return CreateCellInfo(cell, worksheet, imageIndex, null, null);
+        }
+
+        /// <summary>
+        /// 創建儲存格資訊 (原始完整版本 - 已廢棄,保留用於參考)
+        /// </summary>
+        private ExcelCellInfo CreateCellInfo_Legacy(ExcelRange cell, ExcelWorksheet worksheet)
         {
             if (cell == null || worksheet == null)
                 throw new ArgumentNullException("Cell or worksheet cannot be null");
@@ -3010,13 +3055,24 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
-        /// 從 EPPlus ExcelColor 物件提取顏色值
+        /// 從 EPPlus ExcelColor 物件提取顏色值 (帶快取支援)
         /// </summary>
-        private string? GetColorFromExcelColor(OfficeOpenXml.Style.ExcelColor excelColor)
+        private string? GetColorFromExcelColor(OfficeOpenXml.Style.ExcelColor excelColor, ColorCache? cache = null)
         {
             if (excelColor == null)
                 return null;
 
+            // 嘗試從快取讀取
+            if (cache != null)
+            {
+                var cacheKey = cache.GetCacheKey(excelColor);
+                if (cache.TryGetCachedColor(cacheKey, out var cachedColor))
+                {
+                    return cachedColor;
+                }
+            }
+
+            string? result = null;
             try
             {
                 // 1. 優先使用 RGB 值 (靜默處理錯誤)
@@ -3043,66 +3099,78 @@ namespace ExcelReaderAPI.Controllers
                     
                     if (colorValue.Length == 6)
                     {
-                        return colorValue.ToUpperInvariant();
+                        result = colorValue.ToUpperInvariant();
                     }
-                    
                     // 處理3位短格式（例如：F00 -> FF0000）
-                    if (colorValue.Length == 3)
+                    else if (colorValue.Length == 3)
                     {
-                        return $"{colorValue[0]}{colorValue[0]}{colorValue[1]}{colorValue[1]}{colorValue[2]}{colorValue[2]}";
+                        result = $"{colorValue[0]}{colorValue[0]}{colorValue[1]}{colorValue[1]}{colorValue[2]}{colorValue[2]}";
                     }
-                }else{
-                    return null;
                 }
 
                 // 2. 嘗試使用索引顏色 (加強錯誤處理)
-                try
+                if (result == null)
                 {
-                    if (excelColor.Indexed >= 0)
+                    try
                     {
-                        return GetIndexedColor(excelColor.Indexed);
+                        if (excelColor.Indexed >= 0)
+                        {
+                            result = GetIndexedColor(excelColor.Indexed);
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug($"無法存取 Indexed 值: {ex.Message}");
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug($"無法存取 Indexed 值: {ex.Message}");
+                    }
                 }
 
                 // 3. 嘗試使用主題顏色 (加強錯誤處理)
-                try
+                if (result == null)
                 {
-                    if (excelColor.Theme != null)
+                    try
                     {
-                        var themeValue = (int)excelColor.Theme;
-                        var tintValue = (double)excelColor.Tint;
-                        return GetThemeColor(themeValue, tintValue);
+                        if (excelColor.Theme != null)
+                        {
+                            var themeValue = (int)excelColor.Theme;
+                            var tintValue = (double)excelColor.Tint;
+                            result = GetThemeColor(themeValue, tintValue);
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug($"無法存取 Theme 值: {ex.Message}");
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug($"無法存取 Theme 值: {ex.Message}");
+                    }
                 }
 
                 // 4. 嘗試自動顏色 (加強錯誤處理)
-                try
+                if (result == null)
                 {
-                    if (excelColor.Auto == true)
+                    try
                     {
-                        return "000000"; // 預設黑色
+                        if (excelColor.Auto == true)
+                        {
+                            result = "000000"; // 預設黑色
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug($"無法存取 Auto 值: {ex.Message}");
                     }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug($"無法存取 Auto 值: {ex.Message}");
-                }
-                
-                return null;
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "解析顏色時發生錯誤");
-                return null;
             }
+            
+            // 存入快取
+            if (cache != null)
+            {
+                var cacheKey = cache.GetCacheKey(excelColor);
+                cache.CacheColor(cacheKey, result);
+            }
+            
+            return result;
         }
 
         /// <summary>
@@ -3396,7 +3464,7 @@ namespace ExcelReaderAPI.Controllers
                 // 提供兩種標頭：Excel 欄位標頭和內容標頭
                 excelData.Headers = new[] { columnHeaders.ToArray(), contentHeaders.ToArray() };
 
-                // 讀取資料行，保留原始格式（包含Rich Text） - 使用索引優化
+                // 讀取資料行，保留原始格式（包含Rich Text） - 使用索引 + 快取優化
                 var processingStopwatch = System.Diagnostics.Stopwatch.StartNew();
                 var rows = new List<object[]>();
                 for (int row = 1; row <= rowCount; row++) // 從第一行開始（包含所有行）
@@ -3405,7 +3473,7 @@ namespace ExcelReaderAPI.Controllers
                     for (int col = 1; col <= colCount; col++)
                     {
                         var cell = worksheet.Cells[row, col];
-                        rowData.Add(CreateCellInfo(cell, worksheet, imageIndex)); // 使用索引版本
+                        rowData.Add(CreateCellInfo(cell, worksheet, imageIndex, colorCache, mergedCellIndex)); // 使用索引 + 快取
                     }
                     rows.Add(rowData.ToArray());
                 }
