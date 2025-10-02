@@ -24,8 +24,8 @@ namespace ExcelReaderAPI.Models
         public string Name { get; set; } = string.Empty;
         public string? Description { get; set; }
         public string ImageType { get; set; } = string.Empty; // 如：PNG, JPEG, GIF 等
-        public int Width { get; set; }
-        public int Height { get; set; }
+        public int Width { get; set; } // Excel 顯示寬度(像素)
+        public int Height { get; set; } // Excel 顯示高度(像素)
         public double Left { get; set; }
         public double Top { get; set; }
         public string Base64Data { get; set; } = string.Empty; // Base64 編碼的圖片數據
@@ -35,8 +35,10 @@ namespace ExcelReaderAPI.Models
         public string? HyperlinkAddress { get; set; } // 如果圖片有超連結
 
         // 縮放相關資訊
-        public int? OriginalWidth { get; set; } // 原始寬度
-        public int? OriginalHeight { get; set; } // 原始高度
+        public int? OriginalWidth { get; set; } // 原始寬度(像素)
+        public int? OriginalHeight { get; set; } // 原始高度(像素)
+        public double? ExcelWidthCm { get; set; } // Excel 顯示寬度(厘米)
+        public double? ExcelHeightCm { get; set; } // Excel 顯示高度(厘米)
         public double? ScaleFactor { get; set; } // 縮放比例
         public bool IsScaled { get; set; } = false; // 是否經過縮放
         public string? ScaleMethod { get; set; } // 縮放方法描述

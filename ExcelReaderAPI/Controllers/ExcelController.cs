@@ -695,28 +695,118 @@ namespace ExcelReaderAPI.Controllers
                                 {
                                     try
                                     {
-                                        // 獲取圖片實際尺寸
+                                        // 獲取圖片原始尺寸
                                         var (actualWidth, actualHeight) = GetActualImageDimensions(picture);
                                         
-                                        // 獲取錨點儲存格的像素尺寸
-                                        var (cellWidth, cellHeight) = GetCellPixelDimensions(worksheet, fromRow, fromCol);
+                                        // 使用 ExcelDrawingSize 獲取 Excel 中的顯示尺寸
+                                        int excelDisplayWidth = actualWidth;
+                                        int excelDisplayHeight = actualHeight;
+                                        double excelWidthCm = 0;
+                                        double excelHeightCm = 0;
+                                        double scalePercentage = 100.0;
                                         
-                                        // 等比例縮放圖片以適應儲存格
-                                        var (scaledWidth, scaledHeight) = ScaleImageToCell(actualWidth, actualHeight, cellWidth, cellHeight);
-                                        
-                                        // 計算縮放比例
-                                        var scaleFactor = actualWidth > 0 ? (double)scaledWidth / actualWidth : 1.0;
-                                        var isScaled = Math.Abs(scaleFactor - 1.0) > 0.01; // 允許 1% 誤差
+                                        try
+                                        {
+                                            // 從 From/To 計算 Excel 顯示尺寸
+                                            if (picture.From != null && picture.To != null)
+                                            {
+                                                const double emuPerPixel = 9525.0; // 914400 EMU / 96 DPI
+                                                const double emuPerInch = 914400.0;
+                                                const double emuPerCm = emuPerInch / 2.54;
+                                                
+                                                //  正確計算: 需要加上中間儲存格的尺寸
+                                                long totalWidthEmu = 0;
+                                                long totalHeightEmu = 0;
+                                                
+                                                // 計算總寬度
+                                                for (int col = picture.From.Column; col <= picture.To.Column; col++)
+                                                {
+                                                    var column = worksheet.Column(col + 1); // EPPlus column index is 1-based
+                                                    var colWidth = column.Width > 0 ? column.Width : worksheet.DefaultColWidth;
+                                                    // Excel 欄寬單位轉 EMU: 欄寬 * 字符寬度(7px) * 9525 EMU/px
+                                                    long colWidthEmu = (long)(colWidth * 7.0 * emuPerPixel);
+                                                    
+                                                    if (col == picture.From.Column && col == picture.To.Column)
+                                                    {
+                                                        // 同一欄: To.ColumnOff - From.ColumnOff
+                                                        totalWidthEmu = picture.To.ColumnOff - picture.From.ColumnOff;
+                                                    }
+                                                    else if (col == picture.From.Column)
+                                                    {
+                                                        // 起始欄: 儲存格總寬 - From.ColumnOff
+                                                        totalWidthEmu += colWidthEmu - picture.From.ColumnOff;
+                                                    }
+                                                    else if (col == picture.To.Column)
+                                                    {
+                                                        // 結束欄: To.ColumnOff
+                                                        totalWidthEmu += picture.To.ColumnOff;
+                                                    }
+                                                    else
+                                                    {
+                                                        // 中間欄: 完整寬度
+                                                        totalWidthEmu += colWidthEmu;
+                                                    }
+                                                }
+                                                
+                                                // 計算總高度
+                                                for (int row = picture.From.Row; row <= picture.To.Row; row++)
+                                                {
+                                                    var rowObj = worksheet.Row(row + 1); // EPPlus row index is 1-based
+                                                    var rowHeight = rowObj.Height > 0 ? rowObj.Height : worksheet.DefaultRowHeight;
+                                                    // 行高單位是點數(points): 1 point = 12700 EMU
+                                                    long rowHeightEmu = (long)(rowHeight * 12700);
+                                                    
+                                                    if (row == picture.From.Row && row == picture.To.Row)
+                                                    {
+                                                        // 同一行: To.RowOff - From.RowOff
+                                                        totalHeightEmu = picture.To.RowOff - picture.From.RowOff;
+                                                    }
+                                                    else if (row == picture.From.Row)
+                                                    {
+                                                        // 起始行: 儲存格總高 - From.RowOff
+                                                        totalHeightEmu += rowHeightEmu - picture.From.RowOff;
+                                                    }
+                                                    else if (row == picture.To.Row)
+                                                    {
+                                                        // 結束行: To.RowOff
+                                                        totalHeightEmu += picture.To.RowOff;
+                                                    }
+                                                    else
+                                                    {
+                                                        // 中間行: 完整高度
+                                                        totalHeightEmu += rowHeightEmu;
+                                                    }
+                                                }
+                                                
+                                                // 轉換為像素和公分
+                                                excelDisplayWidth = (int)(totalWidthEmu / emuPerPixel);
+                                                excelDisplayHeight = (int)(totalHeightEmu / emuPerPixel);
+                                                excelWidthCm = totalWidthEmu / emuPerCm;
+                                                excelHeightCm = totalHeightEmu / emuPerCm;
+                                                
+                                                // 計算縮放比例
+                                                if (actualWidth > 0 && actualHeight > 0)
+                                                {
+                                                    double scaleX = (double)excelDisplayWidth / actualWidth * 100.0;
+                                                    double scaleY = (double)excelDisplayHeight / actualHeight * 100.0;
+                                                    scalePercentage = (scaleX + scaleY) / 2.0;
+                                                }
+                                                
+                                                _logger.LogDebug($"📐 Excel 顯示尺寸 - 像素: {excelDisplayWidth}×{excelDisplayHeight}px, 厘米: {excelWidthCm:F2}×{excelHeightCm:F2}cm, 縮放: {scalePercentage:F1}%");
+                                            }
+                                        }
+                                        catch (Exception sizeEx)
+                                        {
+                                            _logger.LogWarning($"計算 Excel 顯示尺寸失敗: {sizeEx.Message}");
+                                        }
                                         
                                         var imageInfo = new ImageInfo
                                         {
                                             Name = picture.Name ?? $"Image_{images.Count + 1}",
-                                            Description = isScaled 
-                                                ? $"Excel 檔案中的圖片 (已縮放至儲存格尺寸)"
-                                                : $"Excel 檔案中的圖片",
+                                            Description = $"Excel 圖片 - 原始: {actualWidth}×{actualHeight}px, Excel顯示: {excelDisplayWidth}×{excelDisplayHeight}px ({excelWidthCm:F2}×{excelHeightCm:F2}cm), 縮放: {scalePercentage:F1}%",
                                             ImageType = GetImageTypeFromPicture(picture),
-                                            Width = scaledWidth,
-                                            Height = scaledHeight,
+                                            Width = excelDisplayWidth, // 使用 Excel 顯示寬度
+                                            Height = excelDisplayHeight, // 使用 Excel 顯示高度
                                             Left = (picture.From?.ColumnOff ?? 0) / 9525.0,
                                             Top = (picture.From?.RowOff ?? 0) / 9525.0,
                                             Base64Data = ConvertImageToBase64(picture),
@@ -730,14 +820,14 @@ namespace ExcelReaderAPI.Controllers
                                             },
                                             HyperlinkAddress = picture.Hyperlink?.AbsoluteUri,
                                             
-                                            // 縮放相關資訊
+                                            // 原始尺寸和 Excel 縮放資訊
                                             OriginalWidth = actualWidth,
                                             OriginalHeight = actualHeight,
-                                            ScaleFactor = scaleFactor,
-                                            IsScaled = isScaled,
-                                            ScaleMethod = isScaled 
-                                                ? $"儲存格適應縮放 (儲存格: {cellWidth:F0}x{cellHeight:F0}px)"
-                                                : "無縮放"
+                                            ExcelWidthCm = excelWidthCm,
+                                            ExcelHeightCm = excelHeightCm,
+                                            ScaleFactor = scalePercentage / 100.0,
+                                            IsScaled = Math.Abs(scalePercentage - 100.0) > 1.0,
+                                            ScaleMethod = $"Excel 縮放 {scalePercentage:F1}% (顯示: {excelWidthCm:F2}×{excelHeightCm:F2}cm)"
                                         };
 
                                         images.Add(imageInfo);
@@ -1181,7 +1271,7 @@ namespace ExcelReaderAPI.Controllers
                     if (calculatedWidth > 0 && calculatedHeight > 0)
                     {
                         _logger.LogDebug($"圖片 {picture.Name} 從位置計算尺寸: {calculatedWidth}x{calculatedHeight}");
-                        return (calculatedWidth, calculatedHeight);
+                        //return (calculatedWidth, calculatedHeight);
                     }
                 }
 
@@ -1535,7 +1625,7 @@ namespace ExcelReaderAPI.Controllers
                 foreach (var worksheet in workbook.Worksheets)
                 {
                     if (worksheet.Drawings != null)
-                    {
+                    { 
                         foreach (var drawing in worksheet.Drawings)
                         {
                             if (drawing is OfficeOpenXml.Drawing.ExcelPicture picture)

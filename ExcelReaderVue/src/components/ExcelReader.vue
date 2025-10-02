@@ -121,12 +121,11 @@
                           v-else
                           :src="`data:image/${image.imageType.toLowerCase()};base64,${image.base64Data}`"
                           :alt="image.name"
-                          :title="`${image.name} (${image.width}x${image.height}, ${formatFileSize(image.fileSize)})`"
+                          :title="`${image.name} - Excel顯示: ${image.width}x${image.height}px, 原始: ${image.originalWidth}x${image.originalHeight}px, ${formatFileSize(image.fileSize)}`"
                           class="cell-image"
                           :style="{
-                            width: Math.min(image.width, 200) + 'px',
-                            height: 'auto',
-                            maxHeight: '100px'
+                            width: image.width + 'px',
+                            height: image.height + 'px'
                           }"
                           @click="openImageModal(image)"
                           @error="handleImageError"

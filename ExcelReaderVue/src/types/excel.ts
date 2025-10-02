@@ -24,8 +24,8 @@ export interface ImageInfo {
   name: string
   description?: string
   imageType: string // 如：PNG, JPEG, GIF 等
-  width: number
-  height: number
+  width: number // Excel 顯示寬度(像素)
+  height: number // Excel 顯示高度(像素)
   left: number
   top: number
   base64Data: string // Base64 編碼的圖片數據
@@ -33,6 +33,15 @@ export interface ImageInfo {
   fileSize: number
   anchorCell?: CellPosition // 錨點儲存格
   hyperlinkAddress?: string // 如果圖片有超連結
+
+  // 縮放相關資訊
+  originalWidth?: number // 原始寬度(像素)
+  originalHeight?: number // 原始高度(像素)
+  excelWidthCm?: number // Excel 顯示寬度(厘米)
+  excelHeightCm?: number // Excel 顯示高度(厘米)
+  scaleFactor?: number // 縮放比例
+  isScaled?: boolean // 是否經過縮放
+  scaleMethod?: string // 縮放方法描述
 }
 
 /**
