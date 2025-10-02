@@ -42,6 +42,11 @@ namespace ExcelReaderAPI.Models
         public double? ScaleFactor { get; set; } // 縮放比例
         public bool IsScaled { get; set; } = false; // 是否經過縮放
         public string? ScaleMethod { get; set; } // 縮放方法描述
+
+        // EPPlus 8.x In-Cell Picture 屬性
+        public bool IsInCellPicture { get; set; } = false; // 是否為 In-Cell 圖片 (EPPlus 8.x)
+        public string? AltText { get; set; } // 替代文字 (用於無障礙功能)
+        public bool IsDecorative { get; set; } = false; // 是否為裝飾性圖片
     }
 
     /// <summary>

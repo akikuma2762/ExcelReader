@@ -246,8 +246,8 @@ namespace ExcelReaderAPI.Controllers
 
         static ExcelController()
         {
-            // 設定EPPlus授權（非商業用途）
-            ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+            // 設定EPPlus授權（非商業用途）- EPPlus 8.x 新 API
+            ExcelPackage.License.SetNonCommercialPersonal("dek");//个人
         }
 
         #region 日誌輔助方法 - 統一日誌開關控制
@@ -1296,7 +1296,7 @@ namespace ExcelReaderAPI.Controllers
     }
 
         /// <summary>
-        /// 獲取指定儲存格範圍內的所有圖片 (使用索引優化版)
+        /// 獲取指定儲存格範圍內的所有圖片 (使用索引優化版 + EPPlus 8.x In-Cell Picture API)
         /// </summary>
         private List<ImageInfo>? GetCellImages(ExcelRange cell, WorksheetImageIndex imageIndex, ExcelWorksheet worksheet)
         {
@@ -1304,9 +1304,59 @@ namespace ExcelReaderAPI.Controllers
             {
                 var images = new List<ImageInfo>();
                 
-                _logger.LogDebug($"檢查儲存格 {cell.Address} 的圖片 (使用索引)");
+                _logger.LogDebug($"檢查儲存格 {cell.Address} 的圖片 (使用 EPPlus 8.x API + 索引)");
 
-                // 使用索引快速查詢圖片 - O(1) 複雜度
+                // ⭐ EPPlus 8.x 新 API: 檢查 In-Cell 圖片 (優先使用官方 API)
+                
+                    try
+                    {
+                        // 單一儲存格 - 使用 EPPlus 8.x Picture API
+                        if (cell.Picture.Exists)
+                        {
+                            _logger.LogInformation($"✅ 儲存格 {cell.Address} 包含 In-Cell 圖片 (EPPlus 8.x API)");
+                            
+                            var cellPicture = cell.Picture.Get();
+                            if (cellPicture != null)
+                            {
+                                var imageBytes = cellPicture.GetImageBytes();
+                                var imageType = GetImageTypeFromFileName(cellPicture.FileName);
+                                
+                                var imageInfo = new ImageInfo
+                                {
+                                    Name = cellPicture.FileName ?? $"InCellImage_{cell.Address}",
+                                    Description = $"In-Cell 圖片 (EPPlus 8.x) - 儲存格: {cell.Address}, AltText: {cellPicture.AltText ?? "無"}",
+                                    ImageType = imageType,
+                                    Width = 0, // In-Cell 圖片會自動調整大小
+                                    Height = 0,
+                                    Left = 0,
+                                    Top = 0,
+                                    Base64Data = imageBytes != null ? Convert.ToBase64String(imageBytes) : string.Empty,
+                                    FileName = cellPicture.FileName ?? $"incell_{cell.Address}.png",
+                                    FileSize = imageBytes?.Length ?? 0,
+                                    AnchorCell = new CellPosition 
+                                    { 
+                                        Row = cell.Start.Row, 
+                                        Column = cell.Start.Column, 
+                                        Address = cell.Address 
+                                    },
+                                    HyperlinkAddress = $"In-Cell Picture (Type: {cellPicture.PictureType})",
+                                    IsInCellPicture = true,
+                                    AltText = cellPicture.AltText
+                                };
+                                
+                                images.Add(imageInfo);
+                                _logger.LogInformation($"成功讀取 In-Cell 圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes");
+                                return images.Any() ? images : null;
+                            }
+                        }
+                    }
+                    catch (Exception inCellEx)
+                    {
+                        _logger.LogWarning($"讀取 In-Cell 圖片失敗 (儲存格 {cell.Address}): {inCellEx.Message}");
+                    }
+                
+
+                // 使用索引快速查詢浮動圖片 (Drawing Pictures) - O(1) 複雜度
                 var pictures = imageIndex.GetImagesAtCell(cell.Start.Row, cell.Start.Column);
                 
                 if (pictures == null)
@@ -2269,8 +2319,18 @@ namespace ExcelReaderAPI.Controllers
                 ".tif" => "TIFF",
                 ".wmf" => "WMF",
                 ".emf" => "EMF",
+                ".webp" => "WEBP",
+                ".ico" => "ICO",
                 _ => "Unknown"
             };
+        }
+
+        /// <summary>
+        /// 從檔案名稱獲取圖片格式類型 (別名方法)
+        /// </summary>
+        private string GetImageTypeFromFileName(string? fileName)
+        {
+            return GetImageTypeFromName(fileName);
         }
 
         /// <summary>

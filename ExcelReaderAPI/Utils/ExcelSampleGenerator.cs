@@ -5,10 +5,14 @@ namespace ExcelReaderAPI.Utils
 {
     public static class ExcelSampleGenerator
     {
+        static ExcelSampleGenerator()
+        {
+            // 設定EPPlus授權（非商業用途）- EPPlus 8.x 新 API
+            ExcelPackage.License.SetNonCommercialPersonal("dek");
+        }
+
         public static byte[] GenerateSampleExcel()
         {
-            ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
-            
             using var package = new ExcelPackage();
             var worksheet = package.Workbook.Worksheets.Add("員工資料");
 
