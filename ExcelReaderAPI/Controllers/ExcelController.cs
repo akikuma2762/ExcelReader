@@ -3511,24 +3511,35 @@ namespace ExcelReaderAPI.Controllers
                 // 提供兩種標頭：Excel 欄位標頭和內容標頭
                 excelData.Headers = new[] { columnHeaders.ToArray(), contentHeaders.ToArray() };
 
-                // 讀取資料行，保留原始格式（包含Rich Text） - 使用索引 + 快取優化
+                // 讀取資料行，保留原始格式（包含Rich Text） - 使用索引 + 快取優化 + 並行處理
                 var processingStopwatch = System.Diagnostics.Stopwatch.StartNew();
-                var rows = new List<object[]>();
-                for (int row = 1; row <= rowCount; row++) // 從第一行開始（包含所有行）
+                var rows = new object[rowCount][];
+                
+                // 🚀 Phase 3.2.2: 並行處理 (Row-based Parallel Processing)
+                // 使用 Parallel.For 按行並行處理,充分利用多核 CPU
+                var parallelOptions = new ParallelOptions
                 {
-                    var rowData = new List<object>();
+                    MaxDegreeOfParallelism = Environment.ProcessorCount // 使用所有可用 CPU 核心
+                };
+                
+                LogPerformance($"🔥 開始並行處理 {rowCount} 行,使用 {Environment.ProcessorCount} 個 CPU 核心");
+                
+                Parallel.For(1, rowCount + 1, parallelOptions, row =>
+                {
+                    var rowData = new object[colCount];
                     for (int col = 1; col <= colCount; col++)
                     {
                         var cell = worksheet.Cells[row, col];
-                        rowData.Add(CreateCellInfo(cell, worksheet, imageIndex, colorCache, mergedCellIndex)); // 使用索引 + 快取
+                        rowData[col - 1] = CreateCellInfo(cell, worksheet, imageIndex, colorCache, mergedCellIndex); // 使用索引 + 快取
                     }
-                    rows.Add(rowData.ToArray());
-                }
+                    rows[row - 1] = rowData;
+                });
+                
                 processingStopwatch.Stop();
 
-                excelData.Rows = rows.ToArray();
+                excelData.Rows = rows;
 
-                _logger.LogInformation($"✅ 成功讀取 Excel 檔案: {file.FileName}, 行數: {rowCount}, 欄數: {colCount}, 處理耗時: {processingStopwatch.ElapsedMilliseconds}ms");
+                LogPerformance($"✅ 成功讀取 Excel 檔案: {file.FileName}, 行數: {rowCount}, 欄數: {colCount}, 處理耗時: {processingStopwatch.ElapsedMilliseconds}ms, 平均每行: {processingStopwatch.ElapsedMilliseconds / (double)rowCount:F2}ms");
 
                 return Ok(new UploadResponse
                 {
