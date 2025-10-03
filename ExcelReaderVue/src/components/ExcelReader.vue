@@ -142,6 +142,19 @@
                       <span v-if="cell.metadata?.isRichText" v-html="renderRichText(cell)"></span>
                       <span v-else v-html="formatTextWithLineBreaks(getDisplayValue(cell))"></span>
                     </div>
+                    <!-- 🆕 浮動物件資訊 -->
+                    <div class="floating-objects-info" v-if="showFloatingObjectInfo && cell.floatingObjects && cell.floatingObjects.length > 0">
+                      <div v-for="(obj, idx) in cell.floatingObjects" :key="idx" class="floating-object-item">
+                        <small class="floating-object-badge">{{ obj.objectType }}</small>
+                        <small class="floating-object-name">{{ obj.name }}</small>
+                        <div v-if="obj.text" class="floating-object-text">
+                          <small>📝 {{ obj.text }}</small>
+                        </div>
+                        <small class="floating-object-position" v-if="obj.fromCell && obj.toCell">
+                          {{ obj.fromCell.address }} → {{ obj.toCell.address }}
+                        </small>
+                      </div>
+                    </div>
                     <!-- 位置資訊 -->
                     <div class="position-info" v-if="showPositionInfo && (cell.position?.address || cell.formula)">
                       <small v-if="cell.position?.address">{{ cell.position.address }}</small>
@@ -175,6 +188,10 @@
         <label>
           <input type="checkbox" v-model="showImageInfo" />
           顯示圖片資訊
+        </label>
+        <label>
+          <input type="checkbox" v-model="showFloatingObjectInfo" />
+          顯示浮動物件資訊
         </label>
       </div>
 
@@ -250,6 +267,7 @@ const showOriginalValue = ref<boolean>(false)
 const showAdvancedFormatting = ref<boolean>(false)
 const showPositionInfo = ref<boolean>(false)
 const showImageInfo = ref<boolean>(false)
+const showFloatingObjectInfo = ref<boolean>(false) // 🆕 顯示浮動物件資訊
 const headerType = ref<'column' | 'content'>('column') // 默認顯示 Excel 欄位標頭
 const selectedImage = ref<ImageInfo | null>(null)
 const showImageModal = ref<boolean>(false)
@@ -1234,6 +1252,62 @@ h1 {
 
 .text-content {
   margin-top: 4px;
+}
+
+/* 🆕 浮動物件資訊樣式 */
+.floating-objects-info {
+  margin-top: 8px;
+  padding: 6px;
+  background-color: #f8f9fa;
+  border-left: 3px solid #007bff;
+  border-radius: 4px;
+}
+
+.floating-object-item {
+  padding: 4px 0;
+  border-bottom: 1px dashed #dee2e6;
+}
+
+.floating-object-item:last-child {
+  border-bottom: none;
+}
+
+.floating-object-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  background-color: #007bff;
+  color: white;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: bold;
+  margin-right: 4px;
+}
+
+.floating-object-name {
+  color: #495057;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.floating-object-text {
+  margin: 4px 0;
+  padding: 4px 8px;
+  background-color: #fff;
+  border-radius: 3px;
+  border: 1px solid #dee2e6;
+}
+
+.floating-object-text small {
+  color: #212529;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.floating-object-position {
+  color: #6c757d;
+  font-size: 10px;
+  font-style: italic;
 }
 
 /* 佔位圖片樣式 */

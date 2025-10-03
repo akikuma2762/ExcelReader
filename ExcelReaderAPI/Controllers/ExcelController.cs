@@ -15,21 +15,21 @@ namespace ExcelReaderAPI.Controllers
     public class ExcelController : ControllerBase
     {
         private readonly ILogger<ExcelController> _logger;
-        
+
         // 安全機制：防止無窮迴圈的常數
         private const int MAX_SEARCH_OPERATIONS = 1000;
         private const int MAX_DRAWING_OBJECTS_TO_CHECK = 100;
         private const int MAX_CELLS_TO_SEARCH = 5000;
-        
+
         // 功能開關
-        private const bool ENABLE_FLOATING_OBJECTS_CHECK = false; // 暫時停用浮動物件檢查
+        private const bool ENABLE_FLOATING_OBJECTS_CHECK = true; // ✅ 啟用浮動物件檢查 (用於檢測文字方塊)
         private const bool ENABLE_CELL_IMAGES_CHECK = true; // 保持圖片檢查啟用
-        
+
         // 日誌開關 - 用於效能優化
         private const bool ENABLE_VERBOSE_LOGGING = false; // 詳細日誌 (包含每個儲存格的處理日誌)
         private const bool ENABLE_DEBUG_LOGGING = false; // 調試日誌 (包含圖片檢查、內容類型檢測等)
         private const bool ENABLE_PERFORMANCE_LOGGING = true; // 效能日誌 (關鍵節點的耗時統計)
-        
+
         // 請求層級的計數器 - 使用 ThreadStatic 避免併發問題
         [ThreadStatic]
         private static int _globalDrawingObjectCount = 0;
@@ -46,14 +46,14 @@ namespace ExcelReaderAPI.Controllers
             // Key: "Row_Column" (例: "5_3" 代表 Row=5, Col=3)
             // Value: 該儲存格起始位置的所有圖片
             private readonly Dictionary<string, List<OfficeOpenXml.Drawing.ExcelPicture>> _cellImageMap;
-            
+
             public WorksheetImageIndex(ExcelWorksheet worksheet)
             {
                 _cellImageMap = new Dictionary<string, List<OfficeOpenXml.Drawing.ExcelPicture>>();
-                
+
                 if (worksheet.Drawings == null || !worksheet.Drawings.Any())
                     return;
-                
+
                 // 一次性遍歷所有繪圖物件建立索引
                 foreach (var drawing in worksheet.Drawings)
                 {
@@ -62,15 +62,15 @@ namespace ExcelReaderAPI.Controllers
                         int fromRow = picture.From.Row + 1; // EPPlus 使用 0-based, 轉為 1-based
                         int fromCol = picture.From.Column + 1;
                         string key = $"{fromRow}_{fromCol}";
-                        
+
                         if (!_cellImageMap.ContainsKey(key))
                             _cellImageMap[key] = new List<OfficeOpenXml.Drawing.ExcelPicture>();
-                        
+
                         _cellImageMap[key].Add(picture);
                     }
                 }
             }
-            
+
             /// <summary>
             /// 快速查詢指定儲存格的圖片 - O(1) 複雜度
             /// </summary>
@@ -79,7 +79,7 @@ namespace ExcelReaderAPI.Controllers
                 string key = $"{row}_{col}";
                 return _cellImageMap.TryGetValue(key, out var images) && images.Any() ? images : null;
             }
-            
+
             /// <summary>
             /// 檢查指定儲存格是否有圖片 - O(1) 複雜度
             /// </summary>
@@ -88,7 +88,7 @@ namespace ExcelReaderAPI.Controllers
                 string key = $"{row}_{col}";
                 return _cellImageMap.ContainsKey(key) && _cellImageMap[key].Any();
             }
-            
+
             /// <summary>
             /// 取得總圖片數量
             /// </summary>
@@ -105,23 +105,23 @@ namespace ExcelReaderAPI.Controllers
             private readonly System.Collections.Concurrent.ConcurrentDictionary<string, FontInfo> _fontCache = new();
             private readonly System.Collections.Concurrent.ConcurrentDictionary<string, BorderInfo> _borderCache = new();
             private readonly System.Collections.Concurrent.ConcurrentDictionary<string, FillInfo> _fillCache = new();
-            
+
             public string GetFontCacheKey(ExcelRange cell)
             {
                 return GetFontKey(cell.Style.Font, cell.Style.Fill, cell.Style.Font.Color);
             }
-            
+
             public void CacheFont(string key, FontInfo fontInfo)
             {
                 _fontCache[key] = fontInfo;
             }
-            
+
             public FontInfo? GetCachedFont(string key)
             {
                 _fontCache.TryGetValue(key, out var fontInfo);
                 return fontInfo;
             }
-            
+
             public FillInfo GetOrCreateFill(ExcelRange cell)
             {
                 var key = GetFillKey(cell.Style.Fill);
@@ -137,24 +137,24 @@ namespace ExcelReaderAPI.Controllers
                 }
                 return fillInfo;
             }
-            
+
             private string GetFontKey(OfficeOpenXml.Style.ExcelFont font, OfficeOpenXml.Style.ExcelFill fill, OfficeOpenXml.Style.ExcelColor color)
             {
                 return $"{font.Name}|{font.Size}|{font.Bold}|{font.Italic}|{font.UnderLine}|{font.Strike}|{color.Rgb ?? color.Theme.ToString()}";
             }
-            
+
             private string GetFillKey(OfficeOpenXml.Style.ExcelFill fill)
             {
                 return $"{fill.PatternType}|{fill.BackgroundColor.Rgb}|{fill.BackgroundColor.Theme}|{fill.PatternColor.Rgb}";
             }
-            
+
             // 這些方法需要訪問 ExcelController 的方法,稍後會調整
             private string? GetColorFromExcelColor(OfficeOpenXml.Style.ExcelColor excelColor)
             {
                 // 佔位符,稍後實作
                 return null;
             }
-            
+
             private string? GetBackgroundColor(ExcelRange cell)
             {
                 // 佔位符,稍後實作
@@ -169,18 +169,18 @@ namespace ExcelReaderAPI.Controllers
         private class ColorCache
         {
             private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _cache = new();
-            
+
             public string GetCacheKey(OfficeOpenXml.Style.ExcelColor color)
             {
                 if (color == null) return "null";
                 return $"{color.Rgb}|{color.Theme}|{color.Tint}|{color.Indexed}";
             }
-            
+
             public void CacheColor(string key, string? color)
             {
                 _cache[key] = color;
             }
-            
+
             public bool TryGetCachedColor(string key, out string? color)
             {
                 return _cache.TryGetValue(key, out color);
@@ -195,16 +195,16 @@ namespace ExcelReaderAPI.Controllers
         {
             // Key: "Row_Column", Value: 合併範圍地址 (如 "A1:B2")
             private readonly Dictionary<string, string> _cellToMergeMap = new();
-            
+
             public MergedCellIndex(ExcelWorksheet worksheet)
             {
                 if (worksheet.MergedCells == null || !worksheet.MergedCells.Any())
                     return;
-                
+
                 foreach (var mergeRange in worksheet.MergedCells)
                 {
                     var range = worksheet.Cells[mergeRange];
-                    
+
                     for (int row = range.Start.Row; row <= range.End.Row; row++)
                     {
                         for (int col = range.Start.Column; col <= range.End.Column; col++)
@@ -215,7 +215,7 @@ namespace ExcelReaderAPI.Controllers
                     }
                 }
             }
-            
+
             /// <summary>
             /// 取得指定儲存格所屬的合併範圍 - O(1) 複雜度
             /// </summary>
@@ -224,7 +224,7 @@ namespace ExcelReaderAPI.Controllers
                 _cellToMergeMap.TryGetValue($"{row}_{col}", out var range);
                 return range;
             }
-            
+
             /// <summary>
             /// 檢查指定儲存格是否在合併範圍內 - O(1) 複雜度
             /// </summary>
@@ -232,7 +232,7 @@ namespace ExcelReaderAPI.Controllers
             {
                 return _cellToMergeMap.ContainsKey($"{row}_{col}");
             }
-            
+
             /// <summary>
             /// 取得總合併範圍數量
             /// </summary>
@@ -285,6 +285,125 @@ namespace ExcelReaderAPI.Controllers
             if (ENABLE_PERFORMANCE_LOGGING)
             {
                 _logger.LogInformation(message);
+            }
+        }
+
+        #endregion
+
+        #region DRY 原則 - 共用邏輯提取方法
+
+        /// <summary>
+        /// 設定儲存格的合併資訊
+        /// </summary>
+        private void SetCellMergedInfo(ExcelCellInfo cellInfo, int fromRow, int fromCol, int toRow, int toCol)
+        {
+            int rowSpan = toRow - fromRow + 1;
+            int colSpan = toCol - fromCol + 1;
+
+            cellInfo.Dimensions.IsMerged = true;
+            cellInfo.Dimensions.IsMainMergedCell = true;
+            cellInfo.Dimensions.RowSpan = rowSpan;
+            cellInfo.Dimensions.ColSpan = colSpan;
+            cellInfo.Dimensions.MergedRangeAddress =
+                $"{GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}";
+        }
+
+        /// <summary>
+        /// 合併浮動物件的文字內容到儲存格文字中
+        /// </summary>
+        private void MergeFloatingObjectText(ExcelCellInfo cellInfo, string? floatingObjectText, string cellAddress)
+        {
+            if (string.IsNullOrEmpty(floatingObjectText))
+                return;
+
+            if (!string.IsNullOrEmpty(cellInfo.Text))
+            {
+                // 如果原本有文字,則換行加入
+                cellInfo.Text += "\n" + floatingObjectText;
+            }
+            else
+            {
+                // 如果原本沒有文字,直接設定
+                cellInfo.Text = floatingObjectText;
+            }
+
+            _logger.LogInformation($"✅ 已將浮動物件文字合併到儲存格 {cellAddress}: '{floatingObjectText}'");
+        }
+
+        /// <summary>
+        /// 在工作表的繪圖集合中查找指定名稱的圖片
+        /// </summary>
+        private OfficeOpenXml.Drawing.ExcelPicture? FindPictureInDrawings(ExcelWorksheet worksheet, string imageName)
+        {
+            if (worksheet.Drawings == null || string.IsNullOrEmpty(imageName))
+                return null;
+
+            return worksheet.Drawings
+                .FirstOrDefault(d => d is OfficeOpenXml.Drawing.ExcelPicture p && p.Name == imageName)
+                as OfficeOpenXml.Drawing.ExcelPicture;
+        }
+
+        /// <summary>
+        /// 處理圖片跨儲存格邏輯 (檢查圖片是否跨越多個儲存格並自動設定合併)
+        /// </summary>
+        private void ProcessImageCrossCells(ExcelCellInfo cellInfo, ExcelRange cell, ExcelWorksheet worksheet)
+        {
+            if (cellInfo.Images == null || !cellInfo.Images.Any())
+                return;
+
+            foreach (var image in cellInfo.Images)
+            {
+                var fromRow = image.AnchorCell?.Row ?? cell.Start.Row;
+                var fromCol = image.AnchorCell?.Column ?? cell.Start.Column;
+
+                var picture = FindPictureInDrawings(worksheet, image.Name);
+
+                if (picture != null)
+                {
+                    int toRow = picture.To?.Row + 1 ?? fromRow;
+                    int toCol = picture.To?.Column + 1 ?? fromCol;
+
+                    if (toRow > fromRow || toCol > fromCol)
+                    {
+                        int rowSpan = toRow - fromRow + 1;
+                        int colSpan = toCol - fromCol + 1;
+
+                        _logger.LogInformation($"圖片 '{image.Name}' 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
+
+                        SetCellMergedInfo(cellInfo, fromRow, fromCol, toRow, toCol);
+                        break;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 處理浮動物件跨儲存格邏輯 (包含文字合併)
+        /// </summary>
+        private void ProcessFloatingObjectCrossCells(ExcelCellInfo cellInfo, ExcelRange cell)
+        {
+            if (cellInfo.FloatingObjects == null || !cellInfo.FloatingObjects.Any())
+                return;
+
+            foreach (var floatingObj in cellInfo.FloatingObjects)
+            {
+                var fromRow = floatingObj.FromCell?.Row ?? cell.Start.Row;
+                var fromCol = floatingObj.FromCell?.Column ?? cell.Start.Column;
+                var toRow = floatingObj.ToCell?.Row ?? fromRow;
+                var toCol = floatingObj.ToCell?.Column ?? fromCol;
+
+                if (toRow > fromRow || toCol > fromCol)
+                {
+                    int rowSpan = toRow - fromRow + 1;
+                    int colSpan = toCol - fromCol + 1;
+
+                    _logger.LogInformation($"浮動物件 '{floatingObj.Name}' (類型: {floatingObj.ObjectType}) 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
+
+                    SetCellMergedInfo(cellInfo, fromRow, fromCol, toRow, toCol);
+                    MergeFloatingObjectText(cellInfo, floatingObj.Text, cell.Address);
+
+                    break; // 只需要設定一次
+                }
             }
         }
 
@@ -427,25 +546,25 @@ namespace ExcelReaderAPI.Controllers
             {
                 // 檢查是否有文字內容
                 var hasText = !string.IsNullOrEmpty(cell.Text) || !string.IsNullOrEmpty(cell.Formula);
-                
+
                 // ⭐ EPPlus 8.x: 優先檢查 In-Cell 圖片
                 bool hasInCellPicture = false;
                 try
                 {
                     // 只有單一儲存格才能檢查 In-Cell Picture
-                   
-                    
+
+
                         hasInCellPicture = cell.Picture.Exists;
-                    
+
                 }
                 catch
                 {
                     // 忽略 Picture API 錯誤
                 }
-                
+
                 // 使用索引快速檢查是否有浮動圖片 (Drawing Pictures) - O(1) 複雜度
                 var hasDrawingImages = imageIndex?.HasImagesAtCell(cell.Start.Row, cell.Start.Column) ?? false;
-                
+
                 // 合併判斷：In-Cell 圖片或浮動圖片
                 var hasImages = hasInCellPicture || hasDrawingImages;
 
@@ -475,7 +594,7 @@ namespace ExcelReaderAPI.Controllers
             {
                 // 檢查是否有文字內容
                 var hasText = !string.IsNullOrEmpty(cell.Text) || !string.IsNullOrEmpty(cell.Formula);
-                
+
                 // ⭐ EPPlus 8.x: 優先檢查 In-Cell 圖片
                 bool hasInCellPicture = false;
                 try
@@ -490,10 +609,10 @@ namespace ExcelReaderAPI.Controllers
                 {
                     // 忽略 Picture API 錯誤
                 }
-                
+
                 // 快速檢查是否有浮動圖片（僅檢查位置，不做詳細處理）
                 var hasDrawingImages = false;
-                
+
                 if (worksheet.Drawings != null && worksheet.Drawings.Any())
                 {
                     var cellStartRow = cell.Start.Row;
@@ -509,7 +628,7 @@ namespace ExcelReaderAPI.Controllers
                             {
                                 var fromRow = picture.From.Row + 1;
                                 var fromCol = picture.From.Column + 1;
-                                
+
                                 // 精確的位置檢查（與 GetCellImages 一致）
                                 if (fromRow >= cellStartRow && fromRow <= cellEndRow &&
                                     fromCol >= cellStartCol && fromCol <= cellEndCol)
@@ -546,8 +665,8 @@ namespace ExcelReaderAPI.Controllers
         /// 創建儲存格資訊 (使用索引優化版 + 快取)
         /// </summary>
         private ExcelCellInfo CreateCellInfo(
-            ExcelRange cell, 
-            ExcelWorksheet worksheet, 
+            ExcelRange cell,
+            ExcelWorksheet worksheet,
             WorksheetImageIndex imageIndex,
             ColorCache? colorCache = null,
             MergedCellIndex? mergedCellIndex = null)
@@ -571,10 +690,10 @@ namespace ExcelReaderAPI.Controllers
                     _logger.LogWarning($"🔍 調試點: {debugAddress}, Value Type: {debugValueType}, Value: {debugValue}");
                     // 👈 在這一行設定中斷點 (F9)
                 }
-                
+
                 // 智能內容檢測:先判斷儲存格的主要內容類型 (使用索引)
                 var contentType = DetectCellContentType(cell, imageIndex);
-                
+
                 // 位置資訊（所有類型都需要）
                 cellInfo.Position = new CellPosition
                 {
@@ -623,7 +742,7 @@ namespace ExcelReaderAPI.Controllers
                     cellInfo.Alignment = CreateDefaultAlignmentInfo();
                     cellInfo.Border = CreateDefaultBorderInfo();
                     cellInfo.Fill = CreateDefaultFillInfo();
-                    
+
                     try
                     {
                         cellInfo.NumberFormat = cell.Style.Numberformat.Format;
@@ -672,29 +791,29 @@ namespace ExcelReaderAPI.Controllers
                     {
                         cellInfo.Border = new BorderInfo
                         {
-                            Top = new BorderStyle 
-                            { 
-                                Style = cell.Style.Border?.Top?.Style.ToString() ?? "None", 
+                            Top = new BorderStyle
+                            {
+                                Style = cell.Style.Border?.Top?.Style.ToString() ?? "None",
                                 Color = cell.Style.Border?.Top?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Top.Color, colorCache) : null
                             },
-                            Bottom = new BorderStyle 
-                            { 
-                                Style = cell.Style.Border?.Bottom?.Style.ToString() ?? "None", 
+                            Bottom = new BorderStyle
+                            {
+                                Style = cell.Style.Border?.Bottom?.Style.ToString() ?? "None",
                                 Color = cell.Style.Border?.Bottom?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Bottom.Color, colorCache) : null
                             },
-                            Left = new BorderStyle 
-                            { 
-                                Style = cell.Style.Border?.Left?.Style.ToString() ?? "None", 
+                            Left = new BorderStyle
+                            {
+                                Style = cell.Style.Border?.Left?.Style.ToString() ?? "None",
                                 Color = cell.Style.Border?.Left?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Left.Color, colorCache) : null
                             },
-                            Right = new BorderStyle 
-                            { 
-                                Style = cell.Style.Border?.Right?.Style.ToString() ?? "None", 
+                            Right = new BorderStyle
+                            {
+                                Style = cell.Style.Border?.Right?.Style.ToString() ?? "None",
                                 Color = cell.Style.Border?.Right?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Right.Color, colorCache) : null
                             },
-                            Diagonal = new BorderStyle 
-                            { 
-                                Style = cell.Style.Border?.Diagonal?.Style.ToString() ?? "None", 
+                            Diagonal = new BorderStyle
+                            {
+                                Style = cell.Style.Border?.Diagonal?.Style.ToString() ?? "None",
                                 Color = cell.Style.Border?.Diagonal?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Diagonal.Color, colorCache) : null
                             },
                             DiagonalUp = cell.Style.Border?.DiagonalUp ?? false,
@@ -730,7 +849,7 @@ namespace ExcelReaderAPI.Controllers
                 if (cell.Merge)
                 {
                     ExcelRange? mergedRange = null;
-                    
+
                     // 優先使用索引查詢
                     if (mergedCellIndex != null)
                     {
@@ -745,13 +864,13 @@ namespace ExcelReaderAPI.Controllers
                         // 回退到原始查詢方式
                         mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
                     }
-                    
+
                     if (mergedRange != null)
                     {
                         cellInfo.Dimensions.MergedRangeAddress = mergedRange.Address;
-                        cellInfo.Dimensions.IsMainMergedCell = (cell.Start.Row == mergedRange.Start.Row && 
+                        cellInfo.Dimensions.IsMainMergedCell = (cell.Start.Row == mergedRange.Start.Row &&
                                                                cell.Start.Column == mergedRange.Start.Column);
-                        
+
                         if (cellInfo.Dimensions.IsMainMergedCell == true)
                         {
                             cellInfo.Dimensions.RowSpan = mergedRange.Rows;
@@ -777,7 +896,7 @@ namespace ExcelReaderAPI.Controllers
                         var italic = richTextPart.Italic;
                         var size = richTextPart.Size;
                         var fontName = richTextPart.FontName;
-                        
+
                         if (i == 0)
                         {
                             if (size == 0 || string.IsNullOrEmpty(fontName) || (!bold && !italic))
@@ -788,7 +907,7 @@ namespace ExcelReaderAPI.Controllers
                                 if (!richTextPart.Italic && cell.Style.Font.Italic) italic = true;
                             }
                         }
-                        
+
                         cellInfo.RichText.Add(new RichTextPart
                         {
                             Text = richTextPart.Text,
@@ -832,7 +951,7 @@ namespace ExcelReaderAPI.Controllers
                 if (cell.Merge)
                 {
                     ExcelRange? mergedRange = null;
-                    
+
                     // 優先使用索引查詢
                     if (mergedCellIndex != null)
                     {
@@ -846,53 +965,22 @@ namespace ExcelReaderAPI.Controllers
                     {
                         mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
                     }
-                    
+
                     if (mergedRange != null)
                     {
                         rangeToCheck = mergedRange;
                     }
                 }
                 cellInfo.Images = ENABLE_CELL_IMAGES_CHECK ? GetCellImages(rangeToCheck, imageIndex, worksheet) : null;
-                
-                // 圖片跨儲存格處理 (與原版相同)
-                if (cellInfo.Images != null && cellInfo.Images.Any())
-                {
-                    foreach (var image in cellInfo.Images)
-                    {
-                        var fromRow = image.AnchorCell?.Row ?? cell.Start.Row;
-                        var fromCol = image.AnchorCell?.Column ?? cell.Start.Column;
-                        
-                        var picture = worksheet.Drawings.FirstOrDefault(d => 
-                            d is OfficeOpenXml.Drawing.ExcelPicture p && p.Name == image.Name) 
-                            as OfficeOpenXml.Drawing.ExcelPicture;
-                        
-                        if (picture != null)
-                        {
-                            int toRow = picture.To?.Row + 1 ?? fromRow;
-                            int toCol = picture.To?.Column + 1 ?? fromCol;
-                            
-                            if (toRow > fromRow || toCol > fromCol)
-                            {
-                                int rowSpan = toRow - fromRow + 1;
-                                int colSpan = toCol - fromCol + 1;
-                                
-                                _logger.LogInformation($"圖片 '{image.Name}' 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
-                                
-                                cellInfo.Dimensions.IsMerged = true;
-                                cellInfo.Dimensions.IsMainMergedCell = true;
-                                cellInfo.Dimensions.RowSpan = rowSpan;
-                                cellInfo.Dimensions.ColSpan = colSpan;
-                                cellInfo.Dimensions.MergedRangeAddress = 
-                                    $"{GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}";
-                                
-                                break;
-                            }
-                        }
-                    }
-                }
 
-                // 浮動物件
-                cellInfo.FloatingObjects = ENABLE_FLOATING_OBJECTS_CHECK ? GetCellFloatingObjects(worksheet, cell) : null;
+                // 圖片跨儲存格處理 - 使用 DRY 共用方法
+                ProcessImageCrossCells(cellInfo, cell, worksheet);
+
+                // 浮動物件 - ⭐ 修復: 使用 rangeToCheck (合併儲存格範圍) 而不是 cell
+                cellInfo.FloatingObjects = ENABLE_FLOATING_OBJECTS_CHECK ? GetCellFloatingObjects(worksheet, rangeToCheck) : null;
+
+                // 浮動物件跨儲存格處理 - 使用 DRY 共用方法
+                ProcessFloatingObjectCrossCells(cellInfo, cell);
 
                 // 中繼資料
                 cellInfo.Metadata = new CellMetadata
@@ -903,17 +991,17 @@ namespace ExcelReaderAPI.Controllers
                     StyleName = cell.StyleName,
                     Rows = cell.Rows,
                     Columns = cell.Columns,
-                    Start = new CellPosition 
-                    { 
-                        Row = cell.Start.Row, 
-                        Column = cell.Start.Column, 
-                        Address = cell.Start.Address 
+                    Start = new CellPosition
+                    {
+                        Row = cell.Start.Row,
+                        Column = cell.Start.Column,
+                        Address = cell.Start.Address
                     },
-                    End = new CellPosition 
-                    { 
-                        Row = cell.End.Row, 
-                        Column = cell.End.Column, 
-                        Address = cell.End.Address 
+                    End = new CellPosition
+                    {
+                        Row = cell.End.Row,
+                        Column = cell.End.Column,
+                        Address = cell.End.Address
                     }
                 };
 
@@ -922,7 +1010,7 @@ namespace ExcelReaderAPI.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"讀取儲存格 {cell?.Address ?? "未知位置"} 時發生錯誤");
-                
+
                 return new ExcelCellInfo
                 {
                     Position = new CellPosition
@@ -964,7 +1052,7 @@ namespace ExcelReaderAPI.Controllers
                 // 智能內容檢測：先判斷儲存格的主要內容類型
                 var contentType = DetectCellContentType(cell, worksheet);
                 _logger.LogDebug($"儲存格 {cell.Address} 內容類型: {contentType}");
-                
+
                 // 位置資訊（所有類型都需要）
                 cellInfo.Position = new CellPosition
                 {
@@ -1012,13 +1100,13 @@ namespace ExcelReaderAPI.Controllers
                 {
                     // 純圖片儲存格：使用簡化的樣式處理，避免顏色解析錯誤
                     _logger.LogDebug($"儲存格 {cell.Address} 檢測為純圖片，使用簡化處理");
-                    
+
                     // 提供預設樣式，避免 null 引用
                     cellInfo.Font = CreateDefaultFontInfo();
                     cellInfo.Alignment = CreateDefaultAlignmentInfo();
                     cellInfo.Border = CreateDefaultBorderInfo();
                     cellInfo.Fill = CreateDefaultFillInfo();
-                    
+
                     // 格式化（最小處理）
                     try
                     {
@@ -1035,7 +1123,7 @@ namespace ExcelReaderAPI.Controllers
                 {
                     // 包含文字的儲存格：進行完整樣式處理
                     _logger.LogDebug($"儲存格 {cell.Address} 包含文字內容，進行完整樣式處理");
-                    
+
                     // 格式化
                     cellInfo.NumberFormat = cell.Style.Numberformat.Format;
                     cellInfo.NumberFormatId = cell.Style.Numberformat.NumFmtID;
@@ -1075,29 +1163,29 @@ namespace ExcelReaderAPI.Controllers
                     {
                         cellInfo.Border = new BorderInfo
                         {
-                            Top = new BorderStyle 
-                            { 
-                                Style = cell.Style.Border?.Top?.Style.ToString() ?? "None", 
+                            Top = new BorderStyle
+                            {
+                                Style = cell.Style.Border?.Top?.Style.ToString() ?? "None",
                                 Color = cell.Style.Border?.Top?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Top.Color) : null
                             },
-                            Bottom = new BorderStyle 
-                            { 
-                                Style = cell.Style.Border?.Bottom?.Style.ToString() ?? "None", 
+                            Bottom = new BorderStyle
+                            {
+                                Style = cell.Style.Border?.Bottom?.Style.ToString() ?? "None",
                                 Color = cell.Style.Border?.Bottom?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Bottom.Color) : null
                             },
-                            Left = new BorderStyle 
-                            { 
-                                Style = cell.Style.Border?.Left?.Style.ToString() ?? "None", 
+                            Left = new BorderStyle
+                            {
+                                Style = cell.Style.Border?.Left?.Style.ToString() ?? "None",
                                 Color = cell.Style.Border?.Left?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Left.Color) : null
                             },
-                            Right = new BorderStyle 
-                            { 
-                                Style = cell.Style.Border?.Right?.Style.ToString() ?? "None", 
+                            Right = new BorderStyle
+                            {
+                                Style = cell.Style.Border?.Right?.Style.ToString() ?? "None",
                                 Color = cell.Style.Border?.Right?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Right.Color) : null
                             },
-                            Diagonal = new BorderStyle 
-                            { 
-                                Style = cell.Style.Border?.Diagonal?.Style.ToString() ?? "None", 
+                            Diagonal = new BorderStyle
+                            {
+                                Style = cell.Style.Border?.Diagonal?.Style.ToString() ?? "None",
                                 Color = cell.Style.Border?.Diagonal?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Diagonal.Color) : null
                             },
                             DiagonalUp = cell.Style.Border?.DiagonalUp ?? false,
@@ -1137,14 +1225,14 @@ namespace ExcelReaderAPI.Controllers
                 if (mergedRange != null)
                 {
                     cellInfo.Dimensions.MergedRangeAddress = mergedRange.Address;
-                    cellInfo.Dimensions.IsMainMergedCell = (cell.Start.Row == mergedRange.Start.Row && 
+                    cellInfo.Dimensions.IsMainMergedCell = (cell.Start.Row == mergedRange.Start.Row &&
                                                            cell.Start.Column == mergedRange.Start.Column);
-                    
+
                     if (cellInfo.Dimensions.IsMainMergedCell == true)
                     {
                         cellInfo.Dimensions.RowSpan = mergedRange.Rows;
                         cellInfo.Dimensions.ColSpan = mergedRange.Columns;
-                        
+
                         // 對於主合併儲存格，使用整個合併範圍的邊框
                         cellInfo.Border = GetMergedCellBorder(worksheet, mergedRange, cell);
                     }
@@ -1160,11 +1248,11 @@ namespace ExcelReaderAPI.Controllers
             if (cell.IsRichText && cell.RichText != null && cell.RichText.Count > 0)
             {
                 cellInfo.RichText = new List<RichTextPart>();
-                
+
                 for (int i = 0; i < cell.RichText.Count; i++)
                 {
                     var richTextPart = cell.RichText[i];
-                    
+
                     // 修正第一個 Rich Text 部分的格式問題
                     // EPPlus 的第一個 Rich Text 部分經常缺少格式資訊，需要從儲存格樣式繼承
                     var bold = richTextPart.Bold;
@@ -1172,7 +1260,7 @@ namespace ExcelReaderAPI.Controllers
                     var size = richTextPart.Size;
                     var fontName = richTextPart.FontName;
                     var color = richTextPart.Color;
-                    
+
                     // 如果第一個 Rich Text 部分沒有格式資訊，從儲存格樣式繼承
                     if (i == 0)
                     {
@@ -1180,7 +1268,7 @@ namespace ExcelReaderAPI.Controllers
                         {
                             size = size == 0 ? cell.Style.Font.Size : size;
                             fontName = string.IsNullOrEmpty(fontName) ? cell.Style.Font.Name : fontName;
-                            
+
                             // 只有當 Rich Text 部分沒有設定格式時才繼承
                             if (!richTextPart.Bold && cell.Style.Font.Bold)
                                 bold = true;
@@ -1188,7 +1276,7 @@ namespace ExcelReaderAPI.Controllers
                                 italic = true;
                         }
                     }
-                    
+
                     cellInfo.RichText.Add(new RichTextPart
                     {
                         Text = richTextPart.Text,
@@ -1239,51 +1327,15 @@ namespace ExcelReaderAPI.Controllers
                 }
             }
             cellInfo.Images = ENABLE_CELL_IMAGES_CHECK ? GetCellImages(worksheet, rangeToCheck) : null;
-            
-            // 如果儲存格包含跨儲存格的圖片，自動設定為合併儲存格
-            if (cellInfo.Images != null && cellInfo.Images.Any())
-            {
-                foreach (var image in cellInfo.Images)
-                {
-                    // 檢查圖片是否跨越多個儲存格
-                    var fromRow = image.AnchorCell?.Row ?? cell.Start.Row;
-                    var fromCol = image.AnchorCell?.Column ?? cell.Start.Column;
-                    
-                    // 從圖片的描述或名稱中提取範圍資訊（如果有的話）
-                    // 或者直接從 worksheet.Drawings 中重新查找圖片的 To 位置
-                    var picture = worksheet.Drawings.FirstOrDefault(d => 
-                        d is OfficeOpenXml.Drawing.ExcelPicture p && p.Name == image.Name) 
-                        as OfficeOpenXml.Drawing.ExcelPicture;
-                    
-                    if (picture != null)
-                    {
-                        int toRow = picture.To?.Row + 1 ?? fromRow;
-                        int toCol = picture.To?.Column + 1 ?? fromCol;
-                        
-                        // 如果圖片跨越多個儲存格，設定合併資訊
-                        if (toRow > fromRow || toCol > fromCol)
-                        {
-                            int rowSpan = toRow - fromRow + 1;
-                            int colSpan = toCol - fromCol + 1;
-                            
-                            _logger.LogInformation($"圖片 '{image.Name}' 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
-                            
-                            // 設定為合併儲存格
-                            cellInfo.Dimensions.IsMerged = true;
-                            cellInfo.Dimensions.IsMainMergedCell = true;
-                            cellInfo.Dimensions.RowSpan = rowSpan;
-                            cellInfo.Dimensions.ColSpan = colSpan;
-                            cellInfo.Dimensions.MergedRangeAddress = 
-                                $"{GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}";
-                            
-                            break; // 只需要設定一次
-                        }
-                    }
-                }
-            }
 
-            // 浮動物件（文字框、形狀等） - 暫時停用以避免效能問題
-            cellInfo.FloatingObjects = ENABLE_FLOATING_OBJECTS_CHECK ? GetCellFloatingObjects(worksheet, cell) : null;
+            // 圖片跨儲存格處理 - 使用 DRY 共用方法 (Legacy版本統一邏輯)
+            ProcessImageCrossCells(cellInfo, cell, worksheet);
+
+            // 浮動物件（文字框、形狀等） - ⭐ 修復: 使用 rangeToCheck (合併儲存格範圍) 而不是 cell
+            cellInfo.FloatingObjects = ENABLE_FLOATING_OBJECTS_CHECK ? GetCellFloatingObjects(worksheet, rangeToCheck) : null;
+
+            // 浮動物件跨儲存格處理 - 使用 DRY 共用方法 (Legacy版本統一邏輯)
+            ProcessFloatingObjectCrossCells(cellInfo, cell);
 
             // 中繼資料
             cellInfo.Metadata = new CellMetadata
@@ -1294,17 +1346,17 @@ namespace ExcelReaderAPI.Controllers
                 StyleName = cell.StyleName,
                 Rows = cell.Rows,
                 Columns = cell.Columns,
-                Start = new CellPosition 
-                { 
-                    Row = cell.Start.Row, 
-                    Column = cell.Start.Column, 
-                    Address = cell.Start.Address 
+                Start = new CellPosition
+                {
+                    Row = cell.Start.Row,
+                    Column = cell.Start.Column,
+                    Address = cell.Start.Address
                 },
-                End = new CellPosition 
-                { 
-                    Row = cell.End.Row, 
-                    Column = cell.End.Column, 
-                    Address = cell.End.Address 
+                End = new CellPosition
+                {
+                    Row = cell.End.Row,
+                    Column = cell.End.Column,
+                    Address = cell.End.Address
                 }
             };
 
@@ -1313,7 +1365,7 @@ namespace ExcelReaderAPI.Controllers
         catch (Exception ex)
         {
             _logger.LogError(ex, $"讀取儲存格 {cell?.Address ?? "未知位置"} 時發生錯誤");
-            
+
             // 返回基本的儲存格資訊，避免整個處理中斷
             return new ExcelCellInfo
             {
@@ -1339,36 +1391,36 @@ namespace ExcelReaderAPI.Controllers
             try
             {
                 var images = new List<ImageInfo>();
-                
+
                 _logger.LogDebug($"檢查儲存格 {cell.Address} 的圖片 (使用 EPPlus 8.x API + 索引)");
 
                 // ⭐ EPPlus 8.x 新 API: 檢查 In-Cell 圖片 (優先使用官方 API)
-               
+
                     try
                     {
                         // 單一儲存格 - 使用 EPPlus 8.x Picture API
                         if (cell.Picture.Exists)
                         {
                             _logger.LogInformation($"✅ 儲存格 {cell.Address} 包含 In-Cell 圖片 (EPPlus 8.x API)");
-                            
+
                             var cellPicture = cell.Picture.Get();
                             if (cellPicture != null)
                             {
                                 var imageBytes = cellPicture.GetImageBytes();
                                 var imageType = GetImageTypeFromFileName(cellPicture.FileName);
-                                
+
                                 // 🔍 計算儲存格/合併範圍的像素尺寸 (In-Cell 圖片會填滿整個儲存格)
                                 // 1. 計算單一儲存格的基準高度
                                 var (cellWidthPixels, singleCellHeightPixels) = GetCellPixelDimensions(worksheet, cell.Start.Row, cell.Start.Column);
-                                
+
                                 // 2. 計算合併範圍的總高度
                                 int rowSpan = cell.End.Row - cell.Start.Row + 1; // 合併的行數
                                 double totalHeightPixels = singleCellHeightPixels * rowSpan;
-                                
 
-                                
-                               
-                                
+
+
+
+
                                 var imageInfo = new ImageInfo
                                 {
                                     Name = cellPicture.FileName ?? $"InCellImage_{cell.Address}",
@@ -1381,11 +1433,11 @@ namespace ExcelReaderAPI.Controllers
                                     Base64Data = imageBytes != null ? Convert.ToBase64String(imageBytes) : string.Empty,
                                     FileName = cellPicture.FileName ?? $"incell_{cell.Address}.png",
                                     FileSize = imageBytes?.Length ?? 0,
-                                    AnchorCell = new CellPosition 
-                                    { 
-                                        Row = cell.Start.Row, 
-                                        Column = cell.Start.Column, 
-                                        Address = cell.Address 
+                                    AnchorCell = new CellPosition
+                                    {
+                                        Row = cell.Start.Row,
+                                        Column = cell.Start.Column,
+                                        Address = cell.Address
                                     },
                                     HyperlinkAddress = $"In-Cell Picture (Type: {cellPicture.PictureType})",
                                     IsInCellPicture = true,
@@ -1398,7 +1450,7 @@ namespace ExcelReaderAPI.Controllers
                                     IsScaled = false,
                                     ScaleMethod = $"In-Cell 圖片 (自動填滿 {rowSpan} 行合併儲存格)"
                                 };
-                                
+
                                 images.Add(imageInfo);
                                 _logger.LogInformation($"成功讀取 In-Cell 圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes, 尺寸: {cellWidthPixels:F0}×{totalHeightPixels:F0}px");
                                 return images.Any() ? images : null;
@@ -1409,12 +1461,12 @@ namespace ExcelReaderAPI.Controllers
                     {
                         _logger.LogWarning($"讀取 In-Cell 圖片失敗 (儲存格 {cell.Address}): {inCellEx.Message}");
                     }
-                
-                
+
+
 
                 // 使用索引快速查詢浮動圖片 (Drawing Pictures) - O(1) 複雜度
                 var pictures = imageIndex.GetImagesAtCell(cell.Start.Row, cell.Start.Column);
-                
+
                 if (pictures == null)
                 {
                     _logger.LogDebug($"儲存格 {cell.Address} 沒有圖片");
@@ -1422,7 +1474,7 @@ namespace ExcelReaderAPI.Controllers
                 }
 
                 _logger.LogInformation($"儲存格 {cell.Address} 找到 {pictures.Count} 張圖片 (來自索引)");
-                
+
                 // 處理找到的圖片
                 foreach (var picture in pictures)
                 {
@@ -1430,13 +1482,13 @@ namespace ExcelReaderAPI.Controllers
                     {
                         // 安全獲取圖片位置
                         int fromRow = 1, fromCol = 1, toRow = 1, toCol = 1;
-                        
+
                         if (picture.From != null)
                         {
                             fromRow = picture.From.Row + 1;
                             fromCol = picture.From.Column + 1;
                         }
-                        
+
                         if (picture.To != null)
                         {
                             toRow = picture.To.Row + 1;
@@ -1452,14 +1504,14 @@ namespace ExcelReaderAPI.Controllers
 
                         // 獲取圖片原始尺寸
                         var (actualWidth, actualHeight) = GetActualImageDimensions(picture);
-                        
+
                         // 計算 Excel 顯示尺寸
                         int excelDisplayWidth = actualWidth;
                         int excelDisplayHeight = actualHeight;
                         double excelWidthCm = 0;
                         double excelHeightCm = 0;
                         double scalePercentage = 100.0;
-                        
+
                         try
                         {
                             // 從 From/To 計算 Excel 顯示尺寸
@@ -1468,17 +1520,17 @@ namespace ExcelReaderAPI.Controllers
                                 const double emuPerPixel = 9525.0;
                                 const double emuPerInch = 914400.0;
                                 const double emuPerCm = emuPerInch / 2.54;
-                                
+
                                 long totalWidthEmu = 0;
                                 long totalHeightEmu = 0;
-                                
+
                                 // 計算總寬度
                                 for (int col = picture.From.Column; col <= picture.To.Column; col++)
                                 {
                                     var column = worksheet.Column(col + 1);
                                     var colWidth = column.Width > 0 ? column.Width : worksheet.DefaultColWidth;
                                     long colWidthEmu = (long)(colWidth * 7.0 * emuPerPixel);
-                                    
+
                                     if (col == picture.From.Column && col == picture.To.Column)
                                         totalWidthEmu = picture.To.ColumnOff - picture.From.ColumnOff;
                                     else if (col == picture.From.Column)
@@ -1488,14 +1540,14 @@ namespace ExcelReaderAPI.Controllers
                                     else
                                         totalWidthEmu += colWidthEmu;
                                 }
-                                
+
                                 // 計算總高度
                                 for (int row = picture.From.Row; row <= picture.To.Row; row++)
                                 {
                                     var rowObj = worksheet.Row(row + 1);
                                     var rowHeight = rowObj.Height > 0 ? rowObj.Height : worksheet.DefaultRowHeight;
                                     long rowHeightEmu = (long)(rowHeight * 12700);
-                                    
+
                                     if (row == picture.From.Row && row == picture.To.Row)
                                         totalHeightEmu = picture.To.RowOff - picture.From.RowOff;
                                     else if (row == picture.From.Row)
@@ -1505,19 +1557,19 @@ namespace ExcelReaderAPI.Controllers
                                     else
                                         totalHeightEmu += rowHeightEmu;
                                 }
-                                
+
                                 excelDisplayWidth = (int)(totalWidthEmu / emuPerPixel);
                                 excelDisplayHeight = (int)(totalHeightEmu / emuPerPixel);
                                 excelWidthCm = totalWidthEmu / emuPerCm;
                                 excelHeightCm = totalHeightEmu / emuPerCm;
-                                
+
                                 if (actualWidth > 0 && actualHeight > 0)
                                 {
                                     double scaleX = (double)excelDisplayWidth / actualWidth * 100.0;
                                     double scaleY = (double)excelDisplayHeight / actualHeight * 100.0;
                                     scalePercentage = (scaleX + scaleY) / 2.0;
                                 }
-                                
+
                                 _logger.LogDebug($"📐 Excel 顯示尺寸 - 像素: {excelDisplayWidth}×{excelDisplayHeight}px, 厘米: {excelWidthCm:F2}×{excelHeightCm:F2}cm, 縮放: {scalePercentage:F1}%");
                             }
                         }
@@ -1525,7 +1577,7 @@ namespace ExcelReaderAPI.Controllers
                         {
                             _logger.LogWarning($"計算 Excel 顯示尺寸失敗: {sizeEx.Message}");
                         }
-                        
+
                         var imageInfo = new ImageInfo
                         {
                             Name = picture.Name ?? $"Image_{images.Count + 1}",
@@ -1538,11 +1590,11 @@ namespace ExcelReaderAPI.Controllers
                             Base64Data = ConvertImageToBase64(picture),
                             FileName = picture.Name ?? $"image_{images.Count + 1}.png",
                             FileSize = GetImageFileSize(picture),
-                            AnchorCell = new CellPosition 
-                            { 
-                                Row = fromRow, 
-                                Column = fromCol, 
-                                Address = $"{GetColumnName(fromCol)}{fromRow}" 
+                            AnchorCell = new CellPosition
+                            {
+                                Row = fromRow,
+                                Column = fromCol,
+                                Address = $"{GetColumnName(fromCol)}{fromRow}"
                             },
                             HyperlinkAddress = picture.Hyperlink?.AbsoluteUri,
                             OriginalWidth = actualWidth,
@@ -1580,7 +1632,7 @@ namespace ExcelReaderAPI.Controllers
             try
             {
                 var images = new List<ImageInfo>();
-                
+
                 // 儲存格的邊界
                 var cellStartRow = cell.Start.Row;
                 var cellEndRow = cell.End.Row;
@@ -1607,7 +1659,7 @@ namespace ExcelReaderAPI.Controllers
                 if (worksheet.Drawings != null && worksheet.Drawings.Any())
                 {
                     _logger.LogDebug($"工作表 '{worksheet.Name}' 包含 {worksheet.Drawings.Count} 個繪圖物件 (已檢查: {_globalDrawingObjectCount})");
-                    
+
                     foreach (var drawing in worksheet.Drawings)
                     {
                         // 安全檢查：防止處理過多物件
@@ -1616,20 +1668,20 @@ namespace ExcelReaderAPI.Controllers
                         //     _logger.LogWarning($"已檢查 {MAX_DRAWING_OBJECTS_TO_CHECK} 個繪圖物件，停止進一步檢查以避免效能問題");
                         //     return images.Any() ? images : null;
                         // }
-                        
+
                         try
                         {
                             if (drawing is OfficeOpenXml.Drawing.ExcelPicture picture)
                             {
                                 // 安全獲取圖片位置 - 修復 NullReference 問題
                                 int fromRow = 1, fromCol = 1, toRow = 1, toCol = 1;
-                                
+
                                 if (picture.From != null)
                                 {
                                     fromRow = picture.From.Row + 1;
                                     fromCol = picture.From.Column + 1;
                                 }
-                                
+
                                 if (picture.To != null)
                                 {
                                     toRow = picture.To.Row + 1;
@@ -1647,7 +1699,7 @@ namespace ExcelReaderAPI.Controllers
                                 // 避免同一張圖片被重複添加到多個儲存格，造成資料量過大
                                 bool shouldInclude = (fromRow >= cellStartRow && fromRow <= cellEndRow &&
                                                      fromCol >= cellStartCol && fromCol <= cellEndCol);
-                                
+
                                 // 記錄詳細的檢查結果
                                 _logger.LogDebug($"圖片 '{picture.Name ?? "未命名"}' 位置檢查: " +
                                                $"From({fromRow},{fromCol}) 是否在儲存格 [{cellStartRow},{cellEndRow}] x [{cellStartCol},{cellEndCol}] 內? " +
@@ -1659,14 +1711,14 @@ namespace ExcelReaderAPI.Controllers
                                     {
                                         // 獲取圖片原始尺寸
                                         var (actualWidth, actualHeight) = GetActualImageDimensions(picture);
-                                        
+
                                         // 使用 ExcelDrawingSize 獲取 Excel 中的顯示尺寸
                                         int excelDisplayWidth = actualWidth;
                                         int excelDisplayHeight = actualHeight;
                                         double excelWidthCm = 0;
                                         double excelHeightCm = 0;
                                         double scalePercentage = 100.0;
-                                        
+
                                         try
                                         {
                                             // 從 From/To 計算 Excel 顯示尺寸
@@ -1675,11 +1727,11 @@ namespace ExcelReaderAPI.Controllers
                                                 const double emuPerPixel = 9525.0; // 914400 EMU / 96 DPI
                                                 const double emuPerInch = 914400.0;
                                                 const double emuPerCm = emuPerInch / 2.54;
-                                                
+
                                                 //  正確計算: 需要加上中間儲存格的尺寸
                                                 long totalWidthEmu = 0;
                                                 long totalHeightEmu = 0;
-                                                
+
                                                 // 計算總寬度
                                                 for (int col = picture.From.Column; col <= picture.To.Column; col++)
                                                 {
@@ -1687,7 +1739,7 @@ namespace ExcelReaderAPI.Controllers
                                                     var colWidth = column.Width > 0 ? column.Width : worksheet.DefaultColWidth;
                                                     // Excel 欄寬單位轉 EMU: 欄寬 * 字符寬度(7px) * 9525 EMU/px
                                                     long colWidthEmu = (long)(colWidth * 7.0 * emuPerPixel);
-                                                    
+
                                                     if (col == picture.From.Column && col == picture.To.Column)
                                                     {
                                                         // 同一欄: To.ColumnOff - From.ColumnOff
@@ -1709,7 +1761,7 @@ namespace ExcelReaderAPI.Controllers
                                                         totalWidthEmu += colWidthEmu;
                                                     }
                                                 }
-                                                
+
                                                 // 計算總高度
                                                 for (int row = picture.From.Row; row <= picture.To.Row; row++)
                                                 {
@@ -1717,7 +1769,7 @@ namespace ExcelReaderAPI.Controllers
                                                     var rowHeight = rowObj.Height > 0 ? rowObj.Height : worksheet.DefaultRowHeight;
                                                     // 行高單位是點數(points): 1 point = 12700 EMU
                                                     long rowHeightEmu = (long)(rowHeight * 12700);
-                                                    
+
                                                     if (row == picture.From.Row && row == picture.To.Row)
                                                     {
                                                         // 同一行: To.RowOff - From.RowOff
@@ -1739,13 +1791,13 @@ namespace ExcelReaderAPI.Controllers
                                                         totalHeightEmu += rowHeightEmu;
                                                     }
                                                 }
-                                                
+
                                                 // 轉換為像素和公分
                                                 excelDisplayWidth = (int)(totalWidthEmu / emuPerPixel);
                                                 excelDisplayHeight = (int)(totalHeightEmu / emuPerPixel);
                                                 excelWidthCm = totalWidthEmu / emuPerCm;
                                                 excelHeightCm = totalHeightEmu / emuPerCm;
-                                                
+
                                                 // 計算縮放比例
                                                 if (actualWidth > 0 && actualHeight > 0)
                                                 {
@@ -1753,7 +1805,7 @@ namespace ExcelReaderAPI.Controllers
                                                     double scaleY = (double)excelDisplayHeight / actualHeight * 100.0;
                                                     scalePercentage = (scaleX + scaleY) / 2.0;
                                                 }
-                                                
+
                                                 _logger.LogDebug($"📐 Excel 顯示尺寸 - 像素: {excelDisplayWidth}×{excelDisplayHeight}px, 厘米: {excelWidthCm:F2}×{excelHeightCm:F2}cm, 縮放: {scalePercentage:F1}%");
                                             }
                                         }
@@ -1761,7 +1813,7 @@ namespace ExcelReaderAPI.Controllers
                                         {
                                             _logger.LogWarning($"計算 Excel 顯示尺寸失敗: {sizeEx.Message}");
                                         }
-                                        
+
                                         var imageInfo = new ImageInfo
                                         {
                                             Name = picture.Name ?? $"Image_{images.Count + 1}",
@@ -1774,14 +1826,14 @@ namespace ExcelReaderAPI.Controllers
                                             Base64Data = ConvertImageToBase64(picture),
                                             FileName = picture.Name ?? $"image_{images.Count + 1}.png",
                                             FileSize = GetImageFileSize(picture),
-                                            AnchorCell = new CellPosition 
-                                            { 
-                                                Row = fromRow, 
-                                                Column = fromCol, 
-                                                Address = $"{GetColumnName(fromCol)}{fromRow}" 
+                                            AnchorCell = new CellPosition
+                                            {
+                                                Row = fromRow,
+                                                Column = fromCol,
+                                                Address = $"{GetColumnName(fromCol)}{fromRow}"
                                             },
                                             HyperlinkAddress = picture.Hyperlink?.AbsoluteUri,
-                                            
+
                                             // 原始尺寸和 Excel 縮放資訊
                                             OriginalWidth = actualWidth,
                                             OriginalHeight = actualHeight,
@@ -1817,7 +1869,7 @@ namespace ExcelReaderAPI.Controllers
                     _logger.LogDebug($"工作表 '{worksheet.Name}' 沒有繪圖物件");
                 }
 
-                
+
 
                 return images.Any() ? images : null;
             }
@@ -1830,14 +1882,15 @@ namespace ExcelReaderAPI.Controllers
 
         /// <summary>
         /// 獲取指定儲存格範圍內的所有浮動物件（文字框、形狀等）
+        /// ⭐ 修復: 使用與 GetCellImages 相同的精確判斷邏輯
         /// </summary>
         private List<FloatingObjectInfo>? GetCellFloatingObjects(ExcelWorksheet worksheet, ExcelRange cell)
         {
             try
             {
                 var floatingObjects = new List<FloatingObjectInfo>();
-                
-                // 儲存格的邊界
+
+                // 儲存格的邊界 (支援合併儲存格範圍)
                 var cellStartRow = cell.Start.Row;
                 var cellEndRow = cell.End.Row;
                 var cellStartCol = cell.Start.Column;
@@ -1856,7 +1909,7 @@ namespace ExcelReaderAPI.Controllers
                 if (worksheet.Drawings != null && worksheet.Drawings.Any())
                 {
                     _logger.LogDebug($"工作表 '{worksheet.Name}' 包含 {worksheet.Drawings.Count} 個繪圖物件 (已檢查: {_globalDrawingObjectCount})");
-                    
+
                     foreach (var drawing in worksheet.Drawings)
                     {
                         // 安全檢查：防止處理過多物件
@@ -1865,7 +1918,7 @@ namespace ExcelReaderAPI.Controllers
                             _logger.LogWarning($"已檢查 {MAX_DRAWING_OBJECTS_TO_CHECK} 個繪圖物件，停止進一步檢查以避免效能問題");
                             return floatingObjects.Any() ? floatingObjects : null;
                         }
-                        
+
                         try
                         {
                             // 排除圖片，只處理其他類型的繪圖物件
@@ -1876,13 +1929,13 @@ namespace ExcelReaderAPI.Controllers
 
                             // 安全獲取物件位置
                             int fromRow = 1, fromCol = 1, toRow = 1, toCol = 1;
-                            
+
                             if (drawing.From != null)
                             {
                                 fromRow = drawing.From.Row + 1;
                                 fromCol = drawing.From.Column + 1;
                             }
-                            
+
                             if (drawing.To != null)
                             {
                                 toRow = drawing.To.Row + 1;
@@ -1896,11 +1949,16 @@ namespace ExcelReaderAPI.Controllers
 
                             _logger.LogInformation($"發現浮動物件: '{drawing.Name ?? "未命名"}' 類型: {drawing.GetType().Name} 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
 
-                            // 位置檢查 - 改為更精確的匹配
-                            bool shouldInclude = (fromRow >= cellStartRow - 3 && fromRow <= cellEndRow + 3 &&
-                                                fromCol >= cellStartCol - 3 && fromCol <= cellEndCol + 3) ||
-                                               (toRow >= cellStartRow - 3 && toRow <= cellEndRow + 3 &&
-                                                toCol >= cellStartCol - 3 && toCol <= cellEndCol + 3);
+                            // ⭐ 修復: 使用與 GetCellImages 完全相同的精確判斷邏輯
+                            // 只在浮動物件的起始儲存格（From位置）添加浮動物件
+                            // 避免同一個浮動物件被重複添加到多個儲存格
+                            bool shouldInclude = (fromRow >= cellStartRow && fromRow <= cellEndRow &&
+                                                 fromCol >= cellStartCol && fromCol <= cellEndCol);
+
+                            // 記錄詳細的檢查結果
+                            _logger.LogDebug($"浮動物件 '{drawing.Name ?? "未命名"}' 位置檢查: " +
+                                           $"From({fromRow},{fromCol}) 是否在儲存格 [{cellStartRow},{cellEndRow}] x [{cellStartCol},{cellEndCol}] 內? " +
+                                           $"結果: {shouldInclude}");
 
                             if (shouldInclude)
                             {
@@ -1916,23 +1974,23 @@ namespace ExcelReaderAPI.Controllers
                                         Left = (drawing.From?.ColumnOff ?? 0) / 9525.0,
                                         Top = (drawing.From?.RowOff ?? 0) / 9525.0,
                                         Text = ExtractTextFromDrawing(drawing),
-                                        AnchorCell = new CellPosition 
-                                        { 
-                                            Row = fromRow, 
-                                            Column = fromCol, 
-                                            Address = $"{GetColumnName(fromCol)}{fromRow}" 
+                                        AnchorCell = new CellPosition
+                                        {
+                                            Row = fromRow,
+                                            Column = fromCol,
+                                            Address = $"{GetColumnName(fromCol)}{fromRow}"
                                         },
-                                        FromCell = new CellPosition 
-                                        { 
-                                            Row = fromRow, 
-                                            Column = fromCol, 
-                                            Address = $"{GetColumnName(fromCol)}{fromRow}" 
+                                        FromCell = new CellPosition
+                                        {
+                                            Row = fromRow,
+                                            Column = fromCol,
+                                            Address = $"{GetColumnName(fromCol)}{fromRow}"
                                         },
-                                        ToCell = new CellPosition 
-                                        { 
-                                            Row = toRow, 
-                                            Column = toCol, 
-                                            Address = $"{GetColumnName(toCol)}{toRow}" 
+                                        ToCell = new CellPosition
+                                        {
+                                            Row = toRow,
+                                            Column = toCol,
+                                            Address = $"{GetColumnName(toCol)}{toRow}"
                                         },
                                         IsFloating = true,
                                         Style = ExtractStyleFromDrawing(drawing),
@@ -1974,11 +2032,11 @@ namespace ExcelReaderAPI.Controllers
         private string GetDrawingObjectType(OfficeOpenXml.Drawing.ExcelDrawing drawing)
         {
             var typeName = drawing.GetType().Name;
-            
+
             return typeName switch
             {
                 "ExcelShape" => "Shape",
-                "ExcelTextBox" => "TextBox", 
+                "ExcelTextBox" => "TextBox",
                 "ExcelChart" => "Chart",
                 "ExcelTable" => "Table",
                 "ExcelPicture" => "Picture",
@@ -2036,10 +2094,10 @@ namespace ExcelReaderAPI.Controllers
             try
             {
                 var styles = new List<string>();
-                
+
                 // 使用反射嘗試獲取樣式屬性
                 var styleProperties = new[] { "Fill", "Border", "Font", "TextAlignment", "Style" };
-                
+
                 foreach (var propName in styleProperties)
                 {
                     var property = drawing.GetType().GetProperty(propName);
@@ -2095,20 +2153,20 @@ namespace ExcelReaderAPI.Controllers
                 // 獲取欄寬（Excel 單位）
                 var column = worksheet.Column(col);
                 var columnWidth = column.Width > 0 ? column.Width : worksheet.DefaultColWidth;
-                
+
                 // 獲取行高（點數單位）
                 var rowObj = worksheet.Row(row);
                 var rowHeight = rowObj.Height > 0 ? rowObj.Height : worksheet.DefaultRowHeight;
-                
+
                 // Excel 欄寬單位轉換為像素
                 // Excel 欄寬單位是基於預設字型的字符寬度，約等於 7 像素
                 var cellWidthPixels = columnWidth * 7.0;
-                
+
                 // Excel 行高單位是點數（points），1 point = 4/3 pixels (at 96 DPI)
                 var cellHeightPixels = rowHeight * 4.0 / 3.0;
-                
+
                 _logger.LogDebug($"儲存格 {GetColumnName(col)}{row} 尺寸: {cellWidthPixels:F1} x {cellHeightPixels:F1} 像素");
-                
+
                 return (cellWidthPixels, cellHeightPixels);
             }
             catch (Exception ex)
@@ -2141,7 +2199,7 @@ namespace ExcelReaderAPI.Controllers
 
                 // 確保縮放不會放大圖片過度
                 scale = Math.Min(scale, 2.0); // 最大放大 2 倍
-                
+
                 var scaledWidth = (int)(originalWidth * scale);
                 var scaledHeight = (int)(originalHeight * scale);
 
@@ -2168,7 +2226,7 @@ namespace ExcelReaderAPI.Controllers
                 {
                     var boundsWidth = (int)picture.Image.Bounds.Width;
                     var boundsHeight = (int)picture.Image.Bounds.Height;
-                    
+
                     if (boundsWidth > 0 && boundsHeight > 0)
                     {
                         _logger.LogDebug($"圖片 {picture.Name} 從 Bounds 獲取尺寸: {boundsWidth}x{boundsHeight}");
@@ -2182,13 +2240,13 @@ namespace ExcelReaderAPI.Controllers
                     // EPPlus 使用 EMU (English Metric Units)，1 inch = 914400 EMU
                     // 假設 96 DPI (dots per inch)
                     const double emuPerPixel = 9525.0; // 914400 / 96
-                    
+
                     var widthEmu = picture.To.ColumnOff - picture.From.ColumnOff;
                     var heightEmu = picture.To.RowOff - picture.From.RowOff;
-                    
+
                     var calculatedWidth = Math.Max(1, (int)(widthEmu / emuPerPixel));
                     var calculatedHeight = Math.Max(1, (int)(heightEmu / emuPerPixel));
-                    
+
                     if (calculatedWidth > 0 && calculatedHeight > 0)
                     {
                         _logger.LogDebug($"圖片 {picture.Name} 從位置計算尺寸: {calculatedWidth}x{calculatedHeight}");
@@ -2214,12 +2272,12 @@ namespace ExcelReaderAPI.Controllers
                     var imageType = picture.Image.GetType();
                     var widthProp = imageType.GetProperty("Width");
                     var heightProp = imageType.GetProperty("Height");
-                    
+
                     if (widthProp != null && heightProp != null)
                     {
                         var propWidth = widthProp.GetValue(picture.Image);
                         var propHeight = heightProp.GetValue(picture.Image);
-                        
+
                         if (propWidth is int w && propHeight is int h && w > 0 && h > 0)
                         {
                             _logger.LogDebug($"圖片 {picture.Name} 從屬性獲取尺寸: {w}x{h}");
@@ -2255,7 +2313,7 @@ namespace ExcelReaderAPI.Controllers
                         // PNG IHDR chunk 中的寬高信息（大端序）
                         var width = (imageData[16] << 24) | (imageData[17] << 16) | (imageData[18] << 8) | imageData[19];
                         var height = (imageData[20] << 24) | (imageData[21] << 16) | (imageData[22] << 8) | imageData[23];
-                        
+
                         if (width > 0 && height > 0 && width < 65536 && height < 65536)
                         {
                             _logger.LogDebug($"從 PNG 資料獲取尺寸: {width}x{height}");
@@ -2281,7 +2339,7 @@ namespace ExcelReaderAPI.Controllers
                     // GIF 格式使用小端序
                     var width = imageData[6] | (imageData[7] << 8);
                     var height = imageData[8] | (imageData[9] << 8);
-                    
+
                     if (width > 0 && height > 0 && width < 65536 && height < 65536)
                     {
                         _logger.LogDebug($"從 GIF 資料獲取尺寸: {width}x{height}");
@@ -2306,13 +2364,13 @@ namespace ExcelReaderAPI.Controllers
             try
             {
                 int pos = 2; // 跳過 SOI 標記 (FF D8)
-                
+
                 while (pos < jpegData.Length - 8)
                 {
                     if (jpegData[pos] == 0xFF)
                     {
                         byte marker = jpegData[pos + 1];
-                        
+
                         // SOF0 (Start of Frame) 標記
                         if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2)
                         {
@@ -2321,14 +2379,14 @@ namespace ExcelReaderAPI.Controllers
                                 // JPEG SOF 格式：FF C0 [length] [precision] [height] [width]
                                 var height = (jpegData[pos + 5] << 8) | jpegData[pos + 6];
                                 var width = (jpegData[pos + 7] << 8) | jpegData[pos + 8];
-                                
+
                                 if (width > 0 && height > 0 && width < 65536 && height < 65536)
                                 {
                                     return (width, height);
                                 }
                             }
                         }
-                        
+
                         // 跳到下一個標記
                         if (pos + 3 < jpegData.Length)
                         {
@@ -2345,7 +2403,7 @@ namespace ExcelReaderAPI.Controllers
                         pos++;
                     }
                 }
-                
+
                 return (0, 0);
             }
             catch (Exception ex)
@@ -2429,7 +2487,7 @@ namespace ExcelReaderAPI.Controllers
                         ".tif" => "TIFF",
                         _ => null
                     };
-                    
+
                     if (!string.IsNullOrEmpty(typeFromName))
                     {
                         return typeFromName;
@@ -2440,25 +2498,25 @@ namespace ExcelReaderAPI.Controllers
                 if (picture.Image?.ImageBytes != null && picture.Image.ImageBytes.Length > 8)
                 {
                     var bytes = picture.Image.ImageBytes;
-                    
+
                     // PNG 檔頭: 89 50 4E 47 0D 0A 1A 0A
                     if (bytes.Length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47)
                     {
                         return "PNG";
                     }
-                    
+
                     // JPEG 檔頭: FF D8
                     if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xD8)
                     {
                         return "JPEG";
                     }
-                    
+
                     // GIF 檔頭: 47 49 46 38
                     if (bytes.Length >= 4 && bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38)
                     {
                         return "GIF";
                     }
-                    
+
                     // BMP 檔頭: 42 4D
                     if (bytes.Length >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4D)
                     {
@@ -2493,7 +2551,7 @@ namespace ExcelReaderAPI.Controllers
             {
                 _logger.LogWarning(ex, $"獲取圖片 {picture.Name} 檔案大小時發生錯誤");
             }
-            
+
             return 0;
         }
 
@@ -2513,11 +2571,11 @@ namespace ExcelReaderAPI.Controllers
             {
                 _logger.LogWarning(ex, $"轉換圖片 {picture.Name} 為 Base64 時發生錯誤");
             }
-            
+
             return string.Empty;
         }
 
-        
+
 
         /// <summary>
         /// 根據 ID 在工作簿中查找嵌入的圖片 (支援 EPPlus 7.1.0)
@@ -2527,23 +2585,23 @@ namespace ExcelReaderAPI.Controllers
             try
             {
                 _logger.LogInformation($"開始查找嵌入圖片，ID: {imageId}");
-                
+
                 // 方法 1: 遍歷所有工作表的所有繪圖物件
                 foreach (var worksheet in workbook.Worksheets)
                 {
                     if (worksheet.Drawings != null)
-                    { 
+                    {
                         foreach (var drawing in worksheet.Drawings)
                         {
                             if (drawing is OfficeOpenXml.Drawing.ExcelPicture picture)
                             {
                                 _logger.LogDebug($"檢查圖片: Name={picture.Name}, Description={picture.Description}");
-                                
+
                                 // 檢查圖片名稱或 ID 是否匹配 (使用更寬鬆的匹配條件)
                                 var cleanImageId = imageId.Replace("ID_", "").Replace("\"", "");
-                                if (picture.Name != null && 
-                                    (picture.Name.Contains(imageId) || 
-                                     picture.Name.Contains(cleanImageId) || 
+                                if (picture.Name != null &&
+                                    (picture.Name.Contains(imageId) ||
+                                     picture.Name.Contains(cleanImageId) ||
                                      picture.Name == imageId ||
                                      imageId.Contains(picture.Name)))
                                 {
@@ -2588,7 +2646,7 @@ namespace ExcelReaderAPI.Controllers
             {
                 _logger.LogWarning(ex, $"查找嵌入圖片時發生錯誤，ID: {imageId}");
             }
-            
+
             return null;
         }
 
@@ -2600,42 +2658,42 @@ namespace ExcelReaderAPI.Controllers
             try
             {
                 _logger.LogInformation($"使用 EPPlus 7.1.0 進階功能查找圖片，ID: {imageId}");
-                
+
                 // 方法 1: 直接解析 OOXML 包結構 (新增)
                 // var ooxmlImage = TryDirectOoxmlImageSearch(workbook, imageId);
                 // if (ooxmlImage != null)
                 // {
                 //     return ooxmlImage;
                 // }
-                
+
                 // 方法 2: 嘗試透過 VBA 項目查找圖片
                 var vbaImage = TryFindImageInVbaProject(workbook, imageId);
                 if (vbaImage != null)
                 {
                     return vbaImage;
                 }
-                
+
                 // 方法 3: 搜索所有工作表中的背景圖片
                 var backgroundImage = TryFindBackgroundImage(workbook, imageId);
                 if (backgroundImage != null)
                 {
                     return backgroundImage;
                 }
-                
+
                 // 方法 4: 檢查所有繪圖物件的更多屬性 (EPPlus 7.1.0 增強)
                 var detailedImage = TryDetailedDrawingSearch(workbook, imageId);
                 if (detailedImage != null)
                 {
                     return detailedImage;
                 }
-                
+
                 // 方法 5: 嘗試透過工作表的其他圖片相關屬性
                 var worksheetImage = TryFindImageInWorksheets(workbook, imageId);
                 if (worksheetImage != null)
                 {
                     return worksheetImage;
                 }
-                
+
                 _logger.LogDebug($"EPPlus 7.1.0 所有進階方法都無法找到圖片，ID: {imageId}");
                 return null;
             }
@@ -2643,26 +2701,26 @@ namespace ExcelReaderAPI.Controllers
             {
                 _logger.LogWarning(ex, $"進階圖片搜索時發生錯誤，ID: {imageId}");
             }
-            
+
             return null;
         }
 
-        
-        
 
-        
 
-        
 
-        
 
-        
 
-        
 
-        
 
-       
+
+
+
+
+
+
+
+
+
 
         /// <summary>
         /// 檢查字串是否為有效的 base64
@@ -2671,7 +2729,7 @@ namespace ExcelReaderAPI.Controllers
         {
             if (string.IsNullOrEmpty(str) || str.Length < 10)
                 return false;
-                
+
             try
             {
                 var base64Regex = new Regex(@"^[A-Za-z0-9+/]*={0,2}$");
@@ -2691,7 +2749,7 @@ namespace ExcelReaderAPI.Controllers
             try
             {
                 var cleanImageId = imageId.Replace("ID_", "").Replace("\"", "").ToLowerInvariant();
-                
+
                 foreach (var worksheet in workbook.Worksheets)
                 {
                     // 檢查工作表是否有任何隱藏的圖片屬性
@@ -2706,7 +2764,7 @@ namespace ExcelReaderAPI.Controllers
                                 if (CheckAllPictureProperties(picture, cleanImageId, imageId))
                                 {
                                     _logger.LogInformation($"通過擴展屬性檢查找到匹配圖片: {picture.Name}");
-                                    
+
                                     return CreateImageInfoFromPicture(picture, imageId);
                                 }
                             }
@@ -2717,11 +2775,11 @@ namespace ExcelReaderAPI.Controllers
                             }
                         }
                     }
-                    
+
                     // EPPlus 7.1.0 可能有其他方式存取圖片
                     // 這裡可以添加更多特定於新版本的搜索方法
                 }
-                
+
                 return null;
             }
             catch (Exception ex)
@@ -2741,11 +2799,11 @@ namespace ExcelReaderAPI.Controllers
                 // 檢查基本屬性
                 var name = picture.Name?.ToLowerInvariant() ?? "";
                 var description = picture.Description?.ToLowerInvariant() ?? "";
-                
+
                 // EPPlus 7.1.0 可能有額外的屬性可以檢查
                 // 這裡可以添加更多屬性檢查
-                
-                return name.Contains(cleanImageId) || 
+
+                return name.Contains(cleanImageId) ||
                        name.Contains(originalImageId.ToLowerInvariant()) ||
                        description.Contains(cleanImageId) ||
                        IsPartialIdMatch(cleanImageId, name) ||
@@ -2799,7 +2857,7 @@ namespace ExcelReaderAPI.Controllers
                     _logger.LogDebug($"工作簿包含 VBA 項目，嘗試查找圖片 ID: {imageId}");
                     // 在更新的 EPPlus 版本中，這裡可以進一步實現
                 }
-                
+
                 return null;
             }
             catch (Exception ex)
@@ -2822,12 +2880,12 @@ namespace ExcelReaderAPI.Controllers
                     if (worksheet.BackgroundImage != null)
                     {
                         _logger.LogDebug($"工作表 '{worksheet.Name}' 有背景圖片");
-                        
+
                         // 這裡可以進一步檢查背景圖片是否與我們要找的 ID 相關
                         // EPPlus 4.5.3 的限制使得這個功能可能無法完全實現
                     }
                 }
-                
+
                 return null;
             }
             catch (Exception ex)
@@ -2846,7 +2904,7 @@ namespace ExcelReaderAPI.Controllers
             {
                 var cleanImageId = imageId.Replace("ID_", "").Replace("\"", "").ToLowerInvariant();
                 _logger.LogDebug($"進行詳細繪圖搜索，清理後的 ID: {cleanImageId}");
-                
+
                 foreach (var worksheet in workbook.Worksheets)
                 {
                     if (worksheet.Drawings != null)
@@ -2858,15 +2916,15 @@ namespace ExcelReaderAPI.Controllers
                                 // 檢查更多可能的匹配條件
                                 var pictureName = picture.Name?.ToLowerInvariant() ?? "";
                                 var pictureDescription = picture.Description?.ToLowerInvariant() ?? "";
-                                
+
                                 // 嘗試各種匹配模式
-                                if (pictureName.Contains(cleanImageId) || 
+                                if (pictureName.Contains(cleanImageId) ||
                                     pictureDescription.Contains(cleanImageId) ||
                                     cleanImageId.Contains(pictureName) ||
                                     IsPartialIdMatch(cleanImageId, pictureName))
                                 {
                                     _logger.LogInformation($"透過詳細搜索找到可能匹配的圖片: Name='{picture.Name}', Description='{picture.Description}'");
-                                    
+
                                     return new ImageInfo
                                     {
                                         Name = picture.Name ?? $"Found_{cleanImageId}",
@@ -2891,7 +2949,7 @@ namespace ExcelReaderAPI.Controllers
                         }
                     }
                 }
-                
+
                 return null;
             }
             catch (Exception ex)
@@ -2908,7 +2966,7 @@ namespace ExcelReaderAPI.Controllers
         {
             if (string.IsNullOrEmpty(cleanId) || string.IsNullOrEmpty(pictureName))
                 return false;
-                
+
             // 檢查是否有部分匹配 (至少 8 個字符)
             if (cleanId.Length >= 8 && pictureName.Length >= 8)
             {
@@ -2921,7 +2979,7 @@ namespace ExcelReaderAPI.Controllers
                     }
                 }
             }
-            
+
             return false;
         }
 
@@ -2933,20 +2991,20 @@ namespace ExcelReaderAPI.Controllers
             try
             {
                 _logger.LogInformation("=================== Excel 文件診斷報告 ===================");
-                
+
                 // 統計總體資訊
                 int totalDrawings = 0;
                 int totalPictures = 0;
-                
+
                 foreach (var worksheet in workbook.Worksheets)
                 {
                     _logger.LogInformation($"📊 工作表分析: '{worksheet.Name}'");
-                    
+
                     if (worksheet.Drawings != null && worksheet.Drawings.Any())
                     {
                         totalDrawings += worksheet.Drawings.Count;
                         _logger.LogInformation($"  🎨 繪圖物件數量: {worksheet.Drawings.Count}");
-                        
+
                         for (int i = 0; i < worksheet.Drawings.Count; i++)
                         {
                             var drawing = worksheet.Drawings[i];
@@ -2958,7 +3016,7 @@ namespace ExcelReaderAPI.Controllers
                                 _logger.LogInformation($"    - Description: '{picture.Description ?? "無描述"}'");
                                 _logger.LogInformation($"    - Position: Row {picture.From.Row + 1}, Col {picture.From.Column + 1}");
                                 _logger.LogInformation($"    - Size: {picture.Image?.Bounds.Width ?? 0} x {picture.Image?.Bounds.Height ?? 0}");
-                                
+
                                 // 嘗試獲取更多屬性
                                 try
                                 {
@@ -2983,10 +3041,10 @@ namespace ExcelReaderAPI.Controllers
                     {
                         _logger.LogInformation($"  ❌ 無繪圖物件");
                     }
-                    
-                    
+
+
                 }
-                
+
                 // 總體統計
                 _logger.LogInformation($"=================== 總體統計 ===================");
                 _logger.LogInformation($"📈 總工作表數: {workbook.Worksheets.Count}");
@@ -3000,7 +3058,7 @@ namespace ExcelReaderAPI.Controllers
             }
         }
 
-        
+
 
         /// <summary>
         /// 從 URI 中獲取圖片類型
@@ -3041,7 +3099,7 @@ namespace ExcelReaderAPI.Controllers
                     0x60, 0x60, 0x60, 0x40, 0x40, 0x40, 0x20, 0x20,
                     0x20, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89
                 };
-                
+
                 // 為了簡化，我們使用一個固定的小尺寸佔位符
                 // 實際的完整 100x100 PNG 會很大，這裡用一個簡化版本
                 var simplePlaceholder = new byte[]
@@ -3066,13 +3124,13 @@ namespace ExcelReaderAPI.Controllers
                     0x8C, 0x08, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, // IEND chunk
                     0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82
                 };
-                
+
                 return Convert.ToBase64String(simplePlaceholder);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "生成佔位符圖片時發生錯誤");
-                
+
                 // 如果生成失敗，返回最小的透明圖片
                 var fallbackBytes = new byte[]
                 {
@@ -3086,7 +3144,7 @@ namespace ExcelReaderAPI.Controllers
                     0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, // IEND chunk
                     0x42, 0x60, 0x82
                 };
-                
+
                 return Convert.ToBase64String(fallbackBytes);
             }
         }
@@ -3112,54 +3170,54 @@ namespace ExcelReaderAPI.Controllers
         private BorderInfo GetMergedCellBorder(ExcelWorksheet worksheet, ExcelRange mergedRange, ExcelRange currentCell)
         {
             var border = new BorderInfo();
-            
+
             // 獲取合併範圍的邊界
             int topRow = mergedRange.Start.Row;
             int bottomRow = mergedRange.End.Row;
             int leftCol = mergedRange.Start.Column;
             int rightCol = mergedRange.End.Column;
-            
+
             // 上邊框：來自合併範圍頂部的儲存格
             var topCell = worksheet.Cells[topRow, currentCell.Start.Column];
-            border.Top = new BorderStyle 
-            { 
-                Style = topCell.Style.Border.Top.Style.ToString(), 
+            border.Top = new BorderStyle
+            {
+                Style = topCell.Style.Border.Top.Style.ToString(),
                 Color = GetColorFromExcelColor(topCell.Style.Border.Top.Color)
             };
-            
+
             // 下邊框：來自合併範圍底部的儲存格
             var bottomCell = worksheet.Cells[bottomRow, currentCell.Start.Column];
-            border.Bottom = new BorderStyle 
-            { 
-                Style = bottomCell.Style.Border.Bottom.Style.ToString(), 
+            border.Bottom = new BorderStyle
+            {
+                Style = bottomCell.Style.Border.Bottom.Style.ToString(),
                 Color = GetColorFromExcelColor(bottomCell.Style.Border.Bottom.Color)
             };
-            
+
             // 左邊框：來自合併範圍左側的儲存格
             var leftCell = worksheet.Cells[currentCell.Start.Row, leftCol];
-            border.Left = new BorderStyle 
-            { 
-                Style = leftCell.Style.Border.Left.Style.ToString(), 
+            border.Left = new BorderStyle
+            {
+                Style = leftCell.Style.Border.Left.Style.ToString(),
                 Color = GetColorFromExcelColor(leftCell.Style.Border.Left.Color)
             };
-            
+
             // 右邊框：來自合併範圍右側的儲存格
             var rightCell = worksheet.Cells[currentCell.Start.Row, rightCol];
-            border.Right = new BorderStyle 
-            { 
-                Style = rightCell.Style.Border.Right.Style.ToString(), 
+            border.Right = new BorderStyle
+            {
+                Style = rightCell.Style.Border.Right.Style.ToString(),
                 Color = GetColorFromExcelColor(rightCell.Style.Border.Right.Color)
             };
-            
+
             // 對角線邊框使用當前儲存格的設定
-            border.Diagonal = new BorderStyle 
-            { 
-                Style = currentCell.Style.Border.Diagonal.Style.ToString(), 
+            border.Diagonal = new BorderStyle
+            {
+                Style = currentCell.Style.Border.Diagonal.Style.ToString(),
                 Color = GetColorFromExcelColor(currentCell.Style.Border.Diagonal.Color)
             };
             border.DiagonalUp = currentCell.Style.Border.DiagonalUp;
             border.DiagonalDown = currentCell.Style.Border.DiagonalDown;
-            
+
             return border;
         }
 
@@ -3169,12 +3227,12 @@ namespace ExcelReaderAPI.Controllers
         private string? GetBackgroundColor(ExcelRange cell)
         {
             var fill = cell.Style.Fill;
-            
+
             // 使用條件式詳細日誌 (可透過 ENABLE_VERBOSE_LOGGING 開關控制)
             LogVerbose($"Cell {cell.Address} - PatternType: {fill.PatternType}, " +
                 $"BackgroundColor[Rgb: '{fill.BackgroundColor.Rgb}', Theme: {fill.BackgroundColor.Theme}, Tint: {fill.BackgroundColor.Tint}, Indexed: {fill.BackgroundColor.Indexed}], " +
                 $"PatternColor[Rgb: '{fill.PatternColor.Rgb}', Theme: {fill.PatternColor.Theme}, Tint: {fill.PatternColor.Tint}, Indexed: {fill.PatternColor.Indexed}]");
-            
+
             // 檢查填充類型，只有 Solid 或 Pattern 類型才有背景色
             if (fill.PatternType == OfficeOpenXml.Style.ExcelFillStyle.Solid)
             {
@@ -3184,10 +3242,10 @@ namespace ExcelReaderAPI.Controllers
             else if (fill.PatternType != OfficeOpenXml.Style.ExcelFillStyle.None)
             {
                 // Pattern 填充：優先使用 BackgroundColor，其次使用 PatternColor
-                return GetColorFromExcelColor(fill.BackgroundColor) ?? 
+                return GetColorFromExcelColor(fill.BackgroundColor) ??
                        GetColorFromExcelColor(fill.PatternColor);
             }
-            
+
             return null;
         }
 
@@ -3211,7 +3269,7 @@ namespace ExcelReaderAPI.Controllers
                 }
 
                 var typeName = valueType.FullName ?? valueType.Name;
-                
+
                 // 🚀 特別處理: 檢測 EPPlus 圖片相關類型 (In-Cell Images)
                 if (typeName.Contains("Picture", StringComparison.OrdinalIgnoreCase) ||
                     typeName.Contains("Image", StringComparison.OrdinalIgnoreCase) ||
@@ -3223,7 +3281,7 @@ namespace ExcelReaderAPI.Controllers
                 }
 
                 // 如果類型名稱包含 "Compile" 或 "Result"（EPPlus 內部類型），嘗試轉換為字串
-                if (typeName.Contains("Compile", StringComparison.OrdinalIgnoreCase) || 
+                if (typeName.Contains("Compile", StringComparison.OrdinalIgnoreCase) ||
                     typeName.Contains("Result", StringComparison.OrdinalIgnoreCase))
                 {
                     _logger.LogWarning($"檢測到 EPPlus 內部類型 {typeName}，轉換為字串以避免循環引用");
@@ -3276,14 +3334,14 @@ namespace ExcelReaderAPI.Controllers
                 if (!string.IsNullOrEmpty(rgbValue))
                 {
                     var colorValue = rgbValue.TrimStart('#');
-                    
+
                     // 處理 ARGB 格式（8位）轉為 RGB 格式（6位）
                     if (colorValue.Length == 8)
                     {
                         // ARGB 格式：前2位是Alpha，後6位是RGB
                         colorValue = colorValue.Substring(2);
                     }
-                    
+
                     if (colorValue.Length == 6)
                     {
                         result = colorValue.ToUpperInvariant();
@@ -3349,14 +3407,14 @@ namespace ExcelReaderAPI.Controllers
             {
                 _logger.LogWarning(ex, "解析顏色時發生錯誤");
             }
-            
+
             // 存入快取
             if (cache != null)
             {
                 var cacheKey = cache.GetCacheKey(excelColor);
                 cache.CacheColor(cacheKey, result);
             }
-            
+
             return result;
         }
 
@@ -3377,7 +3435,7 @@ namespace ExcelReaderAPI.Controllers
                 { 5, "FFFF00" },  // Yellow
                 { 6, "FF00FF" },  // Magenta
                 { 7, "00FFFF" },  // Cyan
-                
+
                 // Excel 標準色彩 (8-15) - 重複定義確保相容性
                 { 8, "000000" },  // Black
                 { 9, "FFFFFF" },  // White
@@ -3387,7 +3445,7 @@ namespace ExcelReaderAPI.Controllers
                 { 13, "FFFF00" }, // Yellow
                 { 14, "FF00FF" }, // Magenta
                 { 15, "00FFFF" }, // Cyan
-                
+
                 // Excel 標準調色板 (16-31)
                 { 16, "800000" }, // Dark Red (Maroon)
                 { 17, "008000" }, // Green
@@ -3397,7 +3455,7 @@ namespace ExcelReaderAPI.Controllers
                 { 21, "008080" }, // Dark Cyan (Teal)
                 { 22, "C0C0C0" }, // Light Gray (Silver)
                 { 23, "808080" }, // Gray
-                
+
                 // Excel 擴展色彩 (24-39)
                 { 24, "9999FF" }, // Periwinkle
                 { 25, "993366" }, // Plum
@@ -3407,7 +3465,7 @@ namespace ExcelReaderAPI.Controllers
                 { 29, "FF8080" }, // Coral
                 { 30, "0066CC" }, // Ocean Blue
                 { 31, "CCCCFF" }, // Ice Blue
-                
+
                 // Excel 標準色彩擴展 (32-39)
                 { 32, "000080" }, // Dark Blue
                 { 33, "FF00FF" }, // Pink
@@ -3417,7 +3475,7 @@ namespace ExcelReaderAPI.Controllers
                 { 37, "800000" }, // Dark Red
                 { 38, "008080" }, // Teal
                 { 39, "0000FF" }, // Blue
-                
+
                 // Excel 淺色系列 (40-47)
                 { 40, "00CCFF" }, // Sky Blue
                 { 41, "CCFFFF" }, // Light Turquoise
@@ -3427,7 +3485,7 @@ namespace ExcelReaderAPI.Controllers
                 { 45, "FF99CC" }, // Rose
                 { 46, "CC99FF" }, // Lavender
                 { 47, "FFCC99" }, // Peach
-                
+
                 // Excel 亮色系列 (48-55)
                 { 48, "3366FF" }, // Light Blue
                 { 49, "33CCCC" }, // Aqua
@@ -3437,7 +3495,7 @@ namespace ExcelReaderAPI.Controllers
                 { 53, "FF6600" }, // Orange Red
                 { 54, "666699" }, // Blue Gray
                 { 55, "969696" }, // Gray 40%
-                
+
                 // Excel 深色系列 (56-63)
                 { 56, "003366" }, // Dark Teal
                 { 57, "339966" }, // Sea Green
@@ -3448,7 +3506,7 @@ namespace ExcelReaderAPI.Controllers
                 { 62, "333399" }, // Indigo
                 { 63, "333333" }  // Gray 80%
             };
-            
+
             return indexedColors.ContainsKey(colorIndex) ? indexedColors[colorIndex] : null;
         }
 
@@ -3473,20 +3531,20 @@ namespace ExcelReaderAPI.Controllers
                 { 10, "0563C1" }, // Hyperlink
                 { 11, "954F72" }  // Followed Hyperlink
             };
-            
+
             if (!themeColors.ContainsKey(themeIndex))
             {
                 return null;
             }
-            
+
             var baseColor = themeColors[themeIndex];
-            
+
             // 如果有 Tint 值，需要調整顏色亮度
             if (Math.Abs(tint) > 0.001)
             {
                 return ApplyTint(baseColor, tint);
             }
-            
+
             return baseColor;
         }
 
@@ -3496,13 +3554,13 @@ namespace ExcelReaderAPI.Controllers
         private string ApplyTint(string hexColor, double tint)
         {
             if (hexColor.Length != 6) return hexColor;
-            
+
             try
             {
                 var r = Convert.ToInt32(hexColor.Substring(0, 2), 16);
                 var g = Convert.ToInt32(hexColor.Substring(2, 2), 16);
                 var b = Convert.ToInt32(hexColor.Substring(4, 2), 16);
-                
+
                 if (tint < 0)
                 {
                     // Tint < 0: 變暗
@@ -3517,12 +3575,12 @@ namespace ExcelReaderAPI.Controllers
                     g = (int)(g + (255 - g) * tint);
                     b = (int)(b + (255 - b) * tint);
                 }
-                
+
                 // 確保值在 0-255 範圍內
                 r = Math.Max(0, Math.Min(255, r));
                 g = Math.Max(0, Math.Min(255, g));
                 b = Math.Max(0, Math.Min(255, b));
-                
+
                 return $"{r:X2}{g:X2}{b:X2}";
             }
             catch
@@ -3535,7 +3593,7 @@ namespace ExcelReaderAPI.Controllers
         public async Task<ActionResult<UploadResponse>> UploadExcel(IFormFile file)
         {
             _logger.LogInformation($"開始處理檔案上傳: {file?.FileName ?? "null"}, 大小: {file?.Length ?? 0} bytes");
-            
+
             try
             {
                 if (file == null || file.Length == 0)
@@ -3569,10 +3627,10 @@ namespace ExcelReaderAPI.Controllers
                 stream.Position = 0;
 
                 using var package = new ExcelPackage(stream);
-                
+
                 // 取得所有工作表名稱
                 excelData.AvailableWorksheets = package.Workbook.Worksheets.Select(ws => ws.Name).ToList();
-                
+
                 var worksheet = package.Workbook.Worksheets[0]; // 使用第一個工作表
                 excelData.WorksheetName = worksheet.Name;
 
@@ -3597,10 +3655,10 @@ namespace ExcelReaderAPI.Controllers
                         {
                             var picToRow = picture.To.Row + 1;
                             var picToCol = picture.To.Column + 1;
-                            
+
                             if (picToRow > rowCount) rowCount = picToRow;
                             if (picToCol > colCount) colCount = picToCol;
-                            
+
                             _logger.LogDebug($"圖片 '{picture.Name}' 擴展範圍到: Row {picToRow}, Col {picToCol}");
                         }
                     }
@@ -3614,14 +3672,14 @@ namespace ExcelReaderAPI.Controllers
                 var imageIndexStopwatch = System.Diagnostics.Stopwatch.StartNew();
                 var imageIndex = new WorksheetImageIndex(worksheet);
                 imageIndexStopwatch.Stop();
-                
+
                 // 🚀 Phase 3.1 優化: 建立快取索引 (樣式、顏色、合併儲存格)
                 var cacheStopwatch = System.Diagnostics.Stopwatch.StartNew();
                 var styleCache = new StyleCache();
                 var colorCache = new ColorCache();
                 var mergedCellIndex = new MergedCellIndex(worksheet);
                 cacheStopwatch.Stop();
-                
+
                 _logger.LogInformation($"⚡ 索引建立完成 - 圖片: {imageIndex.TotalImageCount} 張 ({imageIndexStopwatch.ElapsedMilliseconds}ms), " +
                     $"合併儲存格: {mergedCellIndex.MergeCount} 個 ({cacheStopwatch.ElapsedMilliseconds}ms)");
 
@@ -3631,8 +3689,8 @@ namespace ExcelReaderAPI.Controllers
                 {
                     var column = worksheet.Column(col);
                     var width = column.Width > 0 ? column.Width : worksheet.DefaultColWidth;
-                    
-                    columnHeaders.Add(new 
+
+                    columnHeaders.Add(new
                     {
                         Name = GetColumnName(col),
                         Width = width,
@@ -3647,16 +3705,16 @@ namespace ExcelReaderAPI.Controllers
                     var headerCell = worksheet.Cells[1, col];
                     contentHeaders.Add(CreateCellInfo(headerCell, worksheet, imageIndex));
                 }
-                
+
                 // 提供兩種標頭：Excel 欄位標頭和內容標頭
                 excelData.Headers = new[] { columnHeaders.ToArray(), contentHeaders.ToArray() };
 
                 // 讀取資料行，保留原始格式（包含Rich Text） - 使用索引 + 快取優化 + 並行處理
                 var processingStopwatch = System.Diagnostics.Stopwatch.StartNew();
-                
+
                 // 🚀 Phase 3.2.3: 使用刪去法處理合併儲存格 - 建立待排除儲存格集合
                 var excludedCells = new HashSet<string>(); // 儲存格位址 (如 "B2", "C2", ...)
-                
+
                 var rows = new List<object[]>();
                 for (int row = 1; row <= rowCount; row++)
                 {
@@ -3665,7 +3723,7 @@ namespace ExcelReaderAPI.Controllers
                     {
                         var cell = worksheet.Cells[row, col];
                         var cellAddress = cell.Address; // 如 "A2", "B2", ...
-                        
+
                         // 檢查是否在待排除集合中
                         if (excludedCells.Contains(cellAddress))
                         {
@@ -3677,12 +3735,12 @@ namespace ExcelReaderAPI.Controllers
                             var debug = 0;
                         }
                         var cellInfo = CreateCellInfo(cell, worksheet, imageIndex, colorCache, mergedCellIndex);
-                        
+
                         // 如果遇到主合併儲存格,建立待排除集合
                         if (cellInfo.Dimensions?.MergedRangeAddress != null)
                         {
                             var mergedRange = worksheet.Cells[cellInfo.Dimensions.MergedRangeAddress];
-                            
+
                             // 建立該合併範圍內所有儲存格的位址(除了主儲存格)
                             for (int r = mergedRange.Start.Row; r <= mergedRange.End.Row; r++)
                             {
@@ -3696,12 +3754,12 @@ namespace ExcelReaderAPI.Controllers
                                 }
                             }
                         }
-                        
+
                         rowData.Add(cellInfo);
                     }
                     rows.Add(rowData.ToArray());
                 }
-                
+
                 processingStopwatch.Stop();
 
                 excelData.Rows = rows.ToArray();
@@ -3732,32 +3790,32 @@ namespace ExcelReaderAPI.Controllers
             try
             {
                 _logger.LogInformation("開始測試智慧內容檢測功能");
-                
+
                 // 使用現有的 Excel 檔案進行測試
                 var testFilePath = Path.Combine("d:", "VUE_EPPLUS", "有圖片的excel.xlsx");
-                
+
                 if (!System.IO.File.Exists(testFilePath))
                 {
                     return BadRequest($"測試檔案不存在: {testFilePath}");
                 }
-                
+
                 using var package = new ExcelPackage(new FileInfo(testFilePath));
                 var worksheet = package.Workbook.Worksheets[0];
-                
+
                 if (worksheet.Dimension == null)
                 {
                     return BadRequest("Excel 檔案為空");
                 }
-                
+
                 // 測試 A1 儲存格
                 var cellA1 = worksheet.Cells["A1"];
                 var contentType = DetectCellContentType(cellA1, worksheet);
-                
+
                 _logger.LogInformation($"A1 儲存格內容類型檢測結果: {contentType}");
-                
+
                 var cellInfo = CreateCellInfo(cellA1, worksheet);
-                
-                return Ok(new 
+
+                return Ok(new
                 {
                     Message = "智慧內容檢測測試完成",
                     CellAddress = "A1",
@@ -3806,7 +3864,7 @@ namespace ExcelReaderAPI.Controllers
             try
             {
                 var fileBytes = ExcelSampleGenerator.GenerateSampleExcel();
-                return File(fileBytes, 
+                return File(fileBytes,
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     "範例員工資料.xlsx");
             }
@@ -3882,31 +3940,31 @@ namespace ExcelReaderAPI.Controllers
         private object[,] GetRawCellData(ExcelWorksheet worksheet, int maxRows, int maxCols)
         {
             var cells = new object[maxRows, maxCols];
-            
+
             for (int row = 1; row <= maxRows; row++)
             {
                 for (int col = 1; col <= maxCols; col++)
                 {
                     var cell = worksheet.Cells[row, col];
                     var column = worksheet.Column(col);
-                    
+
                     cells[row - 1, col - 1] = new
                     {
                         Position = new { Row = row, Column = col, Address = cell.Address },
-                        
+
                         // 基本值和顯示
                         Value = cell.Value,
                         Text = cell.Text,
                         Formula = cell.Formula,
                         FormulaR1C1 = cell.FormulaR1C1,
-                        
+
                         // 資料類型
                         ValueType = cell.Value?.GetType().Name,
-                        
+
                         // 格式化
                         NumberFormat = cell.Style.Numberformat.Format,
                         NumberFormatId = cell.Style.Numberformat.NumFmtID,
-                        
+
                         // 字體樣式
                         Font = new
                         {
@@ -3923,7 +3981,7 @@ namespace ExcelReaderAPI.Controllers
                             Scheme = cell.Style.Font.Scheme?.ToString(),
                             Family = cell.Style.Font.Family
                         },
-                        
+
                         // 對齊方式
                         Alignment = new
                         {
@@ -3935,7 +3993,7 @@ namespace ExcelReaderAPI.Controllers
                             TextRotation = cell.Style.TextRotation,
                             ShrinkToFit = cell.Style.ShrinkToFit
                         },
-                        
+
                         // 邊框 - 使用 GetColorFromExcelColor 避免循環引用
                         Border = new
                         {
@@ -3947,7 +4005,7 @@ namespace ExcelReaderAPI.Controllers
                             DiagonalUp = cell.Style.Border.DiagonalUp,
                             DiagonalDown = cell.Style.Border.DiagonalDown
                         },
-                        
+
                         // 填充/背景 - 使用 GetColorFromExcelColor 避免循環引用
                         Fill = new
                         {
@@ -3957,7 +4015,7 @@ namespace ExcelReaderAPI.Controllers
                             BackgroundColorTheme = cell.Style.Fill.BackgroundColor.Theme?.ToString(),
                             BackgroundColorTint = cell.Style.Fill.BackgroundColor.Tint
                         },
-                        
+
                         // 尺寸和合併
                         Dimensions = new
                         {
@@ -3966,7 +4024,7 @@ namespace ExcelReaderAPI.Controllers
                             IsMerged = cell.Merge,
                             MergedRangeAddress = cell.Merge ? FindMergedRange(worksheet, row, col)?.Address : null
                         },
-                        
+
                         // Rich Text
                         RichText = cell.IsRichText ? cell.RichText?.Select(rt => new
                         {
@@ -3980,7 +4038,7 @@ namespace ExcelReaderAPI.Controllers
                             Color = rt.Color.IsEmpty ? null : $"#{rt.Color.R:X2}{rt.Color.G:X2}{rt.Color.B:X2}",
                             VerticalAlign = rt.VerticalAlign.ToString()
                         }).ToList() : null,
-                        
+
                         // 註解
                         Comment = cell.Comment != null ? new
                         {
@@ -3989,7 +4047,7 @@ namespace ExcelReaderAPI.Controllers
                             AutoFit = cell.Comment.AutoFit,
                             Visible = cell.Comment.Visible
                         } : null,
-                        
+
                         // 超連結
                         Hyperlink = cell.Hyperlink != null ? new
                         {
@@ -3997,7 +4055,7 @@ namespace ExcelReaderAPI.Controllers
                             OriginalString = cell.Hyperlink.OriginalString,
                             IsAbsoluteUri = cell.Hyperlink.IsAbsoluteUri
                         } : null,
-                        
+
                         // 其他屬性
                         Metadata = new
                         {
@@ -4013,7 +4071,7 @@ namespace ExcelReaderAPI.Controllers
                     };
                 }
             }
-            
+
             return cells;
         }
     }
