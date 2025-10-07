@@ -345,6 +345,7 @@ namespace ExcelReaderAPI.Controllers
 
         /// <summary>
         /// 處理圖片跨儲存格邏輯 (檢查圖片是否跨越多個儲存格並自動設定合併)
+        /// ⭐ 修復: 考慮已存在的合併儲存格範圍
         /// </summary>
         private void ProcessImageCrossCells(ExcelCellInfo cellInfo, ExcelRange cell, ExcelWorksheet worksheet)
         {
@@ -363,8 +364,41 @@ namespace ExcelReaderAPI.Controllers
                     int toRow = picture.To?.Row + 1 ?? fromRow;
                     int toCol = picture.To?.Column + 1 ?? fromCol;
 
-                    if (toRow > fromRow || toCol > fromCol)
+                    // ⭐ 關鍵修復: 檢查儲存格是否已經合併
+                    if (cellInfo.Dimensions?.IsMerged == true && !string.IsNullOrEmpty(cellInfo.Dimensions.MergedRangeAddress))
                     {
+                        // 如果儲存格已經合併，檢查圖片是否完全在合併範圍內
+                        var mergedRange = cellInfo.Dimensions.MergedRangeAddress;
+                        _logger.LogInformation($"⚠️  儲存格 {cell.Address} 已合併 ({mergedRange})，圖片 '{image.Name}' 範圍: {GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}");
+
+                        // 解析合併範圍
+                        var rangeParts = mergedRange.Split(':');
+                        if (rangeParts.Length == 2)
+                        {
+                            // 提取合併範圍的行列信息
+                            var mergedFromRow = cell.Start.Row;
+                            var mergedFromCol = cell.Start.Column;
+                            var mergedToRow = cell.End.Row;
+                            var mergedToCol = cell.End.Column;
+
+                            // 檢查圖片是否超出合併範圍
+                            bool imageExceedsMerged = (toRow > mergedToRow || toCol > mergedToCol ||
+                                                      fromRow < mergedFromRow || fromCol < mergedFromCol);
+
+                            if (imageExceedsMerged)
+                            {
+                                _logger.LogWarning($"⚠️  圖片 '{image.Name}' 範圍 ({GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}) " +
+                                                 $"超出或不完全符合已存在的合併範圍 ({mergedRange})，跳過自動合併");
+                            }
+                            else
+                            {
+                                _logger.LogInformation($"✅ 圖片 '{image.Name}' 完全在已存在的合併範圍內");
+                            }
+                        }
+                    }
+                    else if (toRow > fromRow || toCol > fromCol)
+                    {
+                        // 原始邏輯：儲存格未合併時，根據圖片範圍自動設定合併
                         int rowSpan = toRow - fromRow + 1;
                         int colSpan = toCol - fromCol + 1;
 
@@ -379,6 +413,7 @@ namespace ExcelReaderAPI.Controllers
 
         /// <summary>
         /// 處理浮動物件跨儲存格邏輯 (包含文字合併)
+        /// ⭐ 修復: 考慮已存在的合併儲存格範圍
         /// </summary>
         private void ProcessFloatingObjectCrossCells(ExcelCellInfo cellInfo, ExcelRange cell)
         {
@@ -392,8 +427,48 @@ namespace ExcelReaderAPI.Controllers
                 var toRow = floatingObj.ToCell?.Row ?? fromRow;
                 var toCol = floatingObj.ToCell?.Column ?? fromCol;
 
-                if (toRow > fromRow || toCol > fromCol)
+                // ⭐ 關鍵修復: 檢查儲存格是否已經合併
+                if (cellInfo.Dimensions?.IsMerged == true && !string.IsNullOrEmpty(cellInfo.Dimensions.MergedRangeAddress))
                 {
+                    // 如果儲存格已經合併，檢查浮動物件是否完全在合併範圍內
+                    var mergedRange = cellInfo.Dimensions.MergedRangeAddress;
+                    _logger.LogInformation($"⚠️  儲存格 {cell.Address} 已合併 ({mergedRange})，浮動物件 '{floatingObj.Name}' 範圍: {GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}");
+
+                    // 解析合併範圍
+                    var rangeParts = mergedRange.Split(':');
+                    if (rangeParts.Length == 2)
+                    {
+                        // 簡單解析 (假設格式如 "E2:G9")
+                        var startCell = rangeParts[0];
+                        var endCell = rangeParts[1];
+
+                        // 提取行列信息 (簡化版本)
+                        var mergedFromRow = cell.Start.Row;
+                        var mergedFromCol = cell.Start.Column;
+                        var mergedToRow = cell.End.Row;
+                        var mergedToCol = cell.End.Column;
+
+                        // 檢查浮動物件是否超出合併範圍
+                        bool floatingExceedsMerged = (toRow > mergedToRow || toCol > mergedToCol ||
+                                                     fromRow < mergedFromRow || fromCol < mergedFromCol);
+
+                        if (floatingExceedsMerged)
+                        {
+                            _logger.LogWarning($"⚠️  浮動物件 '{floatingObj.Name}' 範圍 ({GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}) " +
+                                             $"超出或不完全符合已存在的合併範圍 ({mergedRange})，跳過自動合併");
+                        }
+                        else
+                        {
+                            _logger.LogInformation($"✅ 浮動物件 '{floatingObj.Name}' 完全在已存在的合併範圍內，合併文字內容");
+                        }
+                    }
+
+                    // 無論如何都要合併文字內容
+                    MergeFloatingObjectText(cellInfo, floatingObj.Text, cell.Address);
+                }
+                else if (toRow > fromRow || toCol > fromCol)
+                {
+                    // 原始邏輯：儲存格未合併時，根據浮動物件範圍自動設定合併
                     int rowSpan = toRow - fromRow + 1;
                     int colSpan = toCol - fromCol + 1;
 
@@ -403,6 +478,11 @@ namespace ExcelReaderAPI.Controllers
                     MergeFloatingObjectText(cellInfo, floatingObj.Text, cell.Address);
 
                     break; // 只需要設定一次
+                }
+                else
+                {
+                    // 單一儲存格的浮動物件，只合併文字內容
+                    MergeFloatingObjectText(cellInfo, floatingObj.Text, cell.Address);
                 }
             }
         }
@@ -971,13 +1051,33 @@ namespace ExcelReaderAPI.Controllers
                         rangeToCheck = mergedRange;
                     }
                 }
-                cellInfo.Images = ENABLE_CELL_IMAGES_CHECK ? GetCellImages(rangeToCheck, imageIndex, worksheet) : null;
+
+                // ⭐ 修復: 只在合併儲存格的主要儲存格 (左上角) 中查找圖片
+                if (cell.Merge && cellInfo.Dimensions?.IsMainMergedCell != true)
+                {
+                    // 如果是合併儲存格但不是主要儲存格，則不查找圖片
+                    cellInfo.Images = null;
+                    _logger.LogDebug($"儲存格 {cell.Address} 是合併儲存格的次要儲存格，跳過圖片檢查");
+                }
+                else
+                {
+                    cellInfo.Images = ENABLE_CELL_IMAGES_CHECK ? GetCellImages(rangeToCheck, imageIndex, worksheet) : null;
+                }
 
                 // 圖片跨儲存格處理 - 使用 DRY 共用方法
                 ProcessImageCrossCells(cellInfo, cell, worksheet);
 
-                // 浮動物件 - ⭐ 修復: 使用 rangeToCheck (合併儲存格範圍) 而不是 cell
-                cellInfo.FloatingObjects = ENABLE_FLOATING_OBJECTS_CHECK ? GetCellFloatingObjects(worksheet, rangeToCheck) : null;
+                // 浮動物件 - ⭐ 修復: 只在合併儲存格的主要儲存格中查找浮動物件
+                if (cell.Merge && cellInfo.Dimensions?.IsMainMergedCell != true)
+                {
+                    // 如果是合併儲存格但不是主要儲存格，則不查找浮動物件
+                    cellInfo.FloatingObjects = null;
+                    _logger.LogDebug($"儲存格 {cell.Address} 是合併儲存格的次要儲存格，跳過浮動物件檢查");
+                }
+                else
+                {
+                    cellInfo.FloatingObjects = ENABLE_FLOATING_OBJECTS_CHECK ? GetCellFloatingObjects(worksheet, rangeToCheck) : null;
+                }
 
                 // 浮動物件跨儲存格處理 - 使用 DRY 共用方法
                 ProcessFloatingObjectCrossCells(cellInfo, cell);
@@ -1037,351 +1137,6 @@ namespace ExcelReaderAPI.Controllers
             return CreateCellInfo(cell, worksheet, imageIndex, null, null);
         }
 
-        /// <summary>
-        /// 創建儲存格資訊 (原始完整版本 - 已廢棄,保留用於參考)
-        /// </summary>
-        private ExcelCellInfo CreateCellInfo_Legacy(ExcelRange cell, ExcelWorksheet worksheet)
-        {
-            if (cell == null || worksheet == null)
-                throw new ArgumentNullException("Cell or worksheet cannot be null");
-
-            var cellInfo = new ExcelCellInfo();
-
-            try
-            {
-                // 智能內容檢測：先判斷儲存格的主要內容類型
-                var contentType = DetectCellContentType(cell, worksheet);
-                _logger.LogDebug($"儲存格 {cell.Address} 內容類型: {contentType}");
-
-                // 位置資訊（所有類型都需要）
-                cellInfo.Position = new CellPosition
-                {
-                    Row = cell.Start.Row,
-                    Column = cell.Start.Column,
-                    Address = cell.Address ?? $"{GetColumnName(cell.Start.Column)}{cell.Start.Row}"
-                };
-
-                // 基本值和顯示（所有類型都需要）
-                // 安全轉換 cell.Value，避免 EPPlus 內部物件（如 AsCompileResult）造成 JSON 序列化循環引用
-                cellInfo.Value = GetSafeValue(cell.Value);
-                cellInfo.Text = cell.Text;
-                cellInfo.Formula = cell.Formula;
-                cellInfo.FormulaR1C1 = cell.FormulaR1C1;
-
-                // 資料類型（所有類型都需要）
-                cellInfo.ValueType = cell.Value?.GetType().Name;
-                if (cell.Value == null)
-                {
-                    cellInfo.DataType = contentType == CellContentType.ImageOnly ? "Image" : "Empty";
-                }
-                else if (cell.Value is DateTime)
-                {
-                    cellInfo.DataType = "DateTime";
-                }
-                else if (cell.Value is double || cell.Value is float || cell.Value is decimal)
-                {
-                    cellInfo.DataType = "Number";
-                }
-                else if (cell.Value is int || cell.Value is long || cell.Value is short)
-                {
-                    cellInfo.DataType = "Integer";
-                }
-                else if (cell.Value is bool)
-                {
-                    cellInfo.DataType = "Boolean";
-                }
-                else
-                {
-                    cellInfo.DataType = "Text";
-                }
-
-                // 根據內容類型決定是否處理樣式資訊
-                if (contentType == CellContentType.ImageOnly)
-                {
-                    // 純圖片儲存格：使用簡化的樣式處理，避免顏色解析錯誤
-                    _logger.LogDebug($"儲存格 {cell.Address} 檢測為純圖片，使用簡化處理");
-
-                    // 提供預設樣式，避免 null 引用
-                    cellInfo.Font = CreateDefaultFontInfo();
-                    cellInfo.Alignment = CreateDefaultAlignmentInfo();
-                    cellInfo.Border = CreateDefaultBorderInfo();
-                    cellInfo.Fill = CreateDefaultFillInfo();
-
-                    // 格式化（最小處理）
-                    try
-                    {
-                        cellInfo.NumberFormat = cell.Style.Numberformat.Format;
-                        cellInfo.NumberFormatId = cell.Style.Numberformat.NumFmtID;
-                    }
-                    catch
-                    {
-                        cellInfo.NumberFormat = "";
-                        cellInfo.NumberFormatId = 0;
-                    }
-                }
-                else
-                {
-                    // 包含文字的儲存格：進行完整樣式處理
-                    _logger.LogDebug($"儲存格 {cell.Address} 包含文字內容，進行完整樣式處理");
-
-                    // 格式化
-                    cellInfo.NumberFormat = cell.Style.Numberformat.Format;
-                    cellInfo.NumberFormatId = cell.Style.Numberformat.NumFmtID;
-
-                    // 字體樣式
-                    cellInfo.Font = new FontInfo
-                    {
-                        Name = cell.Style.Font.Name,
-                        Size = cell.Style.Font.Size,
-                        Bold = cell.Style.Font.Bold,
-                        Italic = cell.Style.Font.Italic,
-                        UnderLine = cell.Style.Font.UnderLine.ToString(),
-                        Strike = cell.Style.Font.Strike,
-                        Color = GetColorFromExcelColor(cell.Style.Font.Color),
-                        ColorTheme = cell.Style.Font.Color.Theme?.ToString(),
-                        ColorTint = (double?)cell.Style.Font.Color.Tint,
-                        Charset = cell.Style.Font.Charset,
-                        Scheme = cell.Style.Font.Scheme?.ToString(),
-                        Family = cell.Style.Font.Family
-                    };
-
-                    // 對齊方式
-                    cellInfo.Alignment = new AlignmentInfo
-                    {
-                        Horizontal = cell.Style.HorizontalAlignment.ToString(),
-                        Vertical = cell.Style.VerticalAlignment.ToString(),
-                        WrapText = cell.Style.WrapText,
-                        Indent = cell.Style.Indent,
-                        ReadingOrder = cell.Style.ReadingOrder.ToString(),
-                        TextRotation = cell.Style.TextRotation,
-                        ShrinkToFit = cell.Style.ShrinkToFit
-                    };
-
-                    // 邊框
-                    // 邊框設定 - 使用增強的顏色處理，添加 null 安全檢查
-                    try
-                    {
-                        cellInfo.Border = new BorderInfo
-                        {
-                            Top = new BorderStyle
-                            {
-                                Style = cell.Style.Border?.Top?.Style.ToString() ?? "None",
-                                Color = cell.Style.Border?.Top?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Top.Color) : null
-                            },
-                            Bottom = new BorderStyle
-                            {
-                                Style = cell.Style.Border?.Bottom?.Style.ToString() ?? "None",
-                                Color = cell.Style.Border?.Bottom?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Bottom.Color) : null
-                            },
-                            Left = new BorderStyle
-                            {
-                                Style = cell.Style.Border?.Left?.Style.ToString() ?? "None",
-                                Color = cell.Style.Border?.Left?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Left.Color) : null
-                            },
-                            Right = new BorderStyle
-                            {
-                                Style = cell.Style.Border?.Right?.Style.ToString() ?? "None",
-                                Color = cell.Style.Border?.Right?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Right.Color) : null
-                            },
-                            Diagonal = new BorderStyle
-                            {
-                                Style = cell.Style.Border?.Diagonal?.Style.ToString() ?? "None",
-                                Color = cell.Style.Border?.Diagonal?.Color != null ? GetColorFromExcelColor(cell.Style.Border.Diagonal.Color) : null
-                            },
-                            DiagonalUp = cell.Style.Border?.DiagonalUp ?? false,
-                            DiagonalDown = cell.Style.Border?.DiagonalDown ?? false
-                        };
-                    }
-                    catch (Exception borderEx)
-                    {
-                        _logger.LogDebug($"儲存格 {cell.Address} 邊框處理時發生錯誤: {borderEx.Message}，使用預設邊框");
-                        cellInfo.Border = CreateDefaultBorderInfo();
-                    }
-
-                    // 填充/背景 - 使用 GetColorFromExcelColor 避免循環引用
-                    cellInfo.Fill = new FillInfo
-                    {
-                        PatternType = cell.Style.Fill.PatternType.ToString(),
-                        BackgroundColor = GetBackgroundColor(cell),
-                        PatternColor = GetColorFromExcelColor(cell.Style.Fill.PatternColor),
-                        BackgroundColorTheme = cell.Style.Fill.BackgroundColor.Theme?.ToString(),
-                        BackgroundColorTint = (double?)cell.Style.Fill.BackgroundColor.Tint
-                    };
-                }
-
-            // 尺寸和合併
-            var column = worksheet.Column(cell.Start.Column);
-            cellInfo.Dimensions = new DimensionInfo
-            {
-                ColumnWidth = column.Width > 0 ? column.Width : worksheet.DefaultColWidth,
-                RowHeight = worksheet.Row(cell.Start.Row).Height,
-                IsMerged = cell.Merge
-            };
-
-            // 檢查是否為合併儲存格
-            if (cell.Merge)
-            {
-                var mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
-                if (mergedRange != null)
-                {
-                    cellInfo.Dimensions.MergedRangeAddress = mergedRange.Address;
-                    cellInfo.Dimensions.IsMainMergedCell = (cell.Start.Row == mergedRange.Start.Row &&
-                                                           cell.Start.Column == mergedRange.Start.Column);
-
-                    if (cellInfo.Dimensions.IsMainMergedCell == true)
-                    {
-                        cellInfo.Dimensions.RowSpan = mergedRange.Rows;
-                        cellInfo.Dimensions.ColSpan = mergedRange.Columns;
-
-                        // 對於主合併儲存格，使用整個合併範圍的邊框
-                        cellInfo.Border = GetMergedCellBorder(worksheet, mergedRange, cell);
-                    }
-                    else
-                    {
-                        cellInfo.Dimensions.RowSpan = 1;
-                        cellInfo.Dimensions.ColSpan = 1;
-                    }
-                }
-            }
-
-            // Rich Text
-            if (cell.IsRichText && cell.RichText != null && cell.RichText.Count > 0)
-            {
-                cellInfo.RichText = new List<RichTextPart>();
-
-                for (int i = 0; i < cell.RichText.Count; i++)
-                {
-                    var richTextPart = cell.RichText[i];
-
-                    // 修正第一個 Rich Text 部分的格式問題
-                    // EPPlus 的第一個 Rich Text 部分經常缺少格式資訊，需要從儲存格樣式繼承
-                    var bold = richTextPart.Bold;
-                    var italic = richTextPart.Italic;
-                    var size = richTextPart.Size;
-                    var fontName = richTextPart.FontName;
-                    var color = richTextPart.Color;
-
-                    // 如果第一個 Rich Text 部分沒有格式資訊，從儲存格樣式繼承
-                    if (i == 0)
-                    {
-                        if (size == 0 || string.IsNullOrEmpty(fontName) || (!bold && !italic))
-                        {
-                            size = size == 0 ? cell.Style.Font.Size : size;
-                            fontName = string.IsNullOrEmpty(fontName) ? cell.Style.Font.Name : fontName;
-
-                            // 只有當 Rich Text 部分沒有設定格式時才繼承
-                            if (!richTextPart.Bold && cell.Style.Font.Bold)
-                                bold = true;
-                            if (!richTextPart.Italic && cell.Style.Font.Italic)
-                                italic = true;
-                        }
-                    }
-
-                    cellInfo.RichText.Add(new RichTextPart
-                    {
-                        Text = richTextPart.Text,
-                        Bold = bold,
-                        Italic = italic,
-                        UnderLine = richTextPart.UnderLine,
-                        Strike = richTextPart.Strike,
-                        Size = size,
-                        FontName = fontName,
-                        Color = richTextPart.Color.IsEmpty ? null : $"#{richTextPart.Color.R:X2}{richTextPart.Color.G:X2}{richTextPart.Color.B:X2}",
-                        VerticalAlign = richTextPart.VerticalAlign.ToString()
-                    });
-                }
-            }
-
-            // 註解
-            if (cell.Comment != null)
-            {
-                cellInfo.Comment = new CommentInfo
-                {
-                    Text = cell.Comment.Text,
-                    Author = cell.Comment.Author,
-                    AutoFit = cell.Comment.AutoFit,
-                    Visible = cell.Comment.Visible
-                };
-            }
-
-            // 超連結
-            if (cell.Hyperlink != null)
-            {
-                cellInfo.Hyperlink = new HyperlinkInfo
-                {
-                    AbsoluteUri = cell.Hyperlink.AbsoluteUri,
-                    OriginalString = cell.Hyperlink.OriginalString,
-                    IsAbsoluteUri = cell.Hyperlink.IsAbsoluteUri
-                };
-            }
-
-            // 圖片 - 根據開關決定是否檢查
-            // 如果是合併儲存格，使用整個合併範圍來檢查圖片
-            ExcelRange rangeToCheck = cell;
-            if (cell.Merge)
-            {
-                var mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
-                if (mergedRange != null)
-                {
-                    rangeToCheck = mergedRange;
-                }
-            }
-            cellInfo.Images = ENABLE_CELL_IMAGES_CHECK ? GetCellImages(worksheet, rangeToCheck) : null;
-
-            // 圖片跨儲存格處理 - 使用 DRY 共用方法 (Legacy版本統一邏輯)
-            ProcessImageCrossCells(cellInfo, cell, worksheet);
-
-            // 浮動物件（文字框、形狀等） - ⭐ 修復: 使用 rangeToCheck (合併儲存格範圍) 而不是 cell
-            cellInfo.FloatingObjects = ENABLE_FLOATING_OBJECTS_CHECK ? GetCellFloatingObjects(worksheet, rangeToCheck) : null;
-
-            // 浮動物件跨儲存格處理 - 使用 DRY 共用方法 (Legacy版本統一邏輯)
-            ProcessFloatingObjectCrossCells(cellInfo, cell);
-
-            // 中繼資料
-            cellInfo.Metadata = new CellMetadata
-            {
-                HasFormula = !string.IsNullOrEmpty(cell.Formula),
-                IsRichText = cell.IsRichText,
-                StyleId = cell.StyleID,
-                StyleName = cell.StyleName,
-                Rows = cell.Rows,
-                Columns = cell.Columns,
-                Start = new CellPosition
-                {
-                    Row = cell.Start.Row,
-                    Column = cell.Start.Column,
-                    Address = cell.Start.Address
-                },
-                End = new CellPosition
-                {
-                    Row = cell.End.Row,
-                    Column = cell.End.Column,
-                    Address = cell.End.Address
-                }
-            };
-
-            return cellInfo;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, $"讀取儲存格 {cell?.Address ?? "未知位置"} 時發生錯誤");
-
-            // 返回基本的儲存格資訊，避免整個處理中斷
-            return new ExcelCellInfo
-            {
-                Position = new CellPosition
-                {
-                    Row = cell?.Start.Row ?? 0,
-                    Column = cell?.Start.Column ?? 0,
-                    Address = cell?.Address ?? "未知"
-                },
-                Value = null,
-                Text = "",
-                DataType = "Error",
-                Font = new FontInfo { Color = "000000" }
-            };
-        }
-    }
 
         /// <summary>
         /// 獲取指定儲存格範圍內的所有圖片 (使用索引優化版 + EPPlus 8.x In-Cell Picture API)
@@ -1882,7 +1637,7 @@ namespace ExcelReaderAPI.Controllers
 
         /// <summary>
         /// 獲取指定儲存格範圍內的所有浮動物件（文字框、形狀等）
-        /// ⭐ 修復: 使用與 GetCellImages 相同的精確判斷邏輯
+        /// ⭐ 修復: 解決合併儲存格與浮動圖片跨足範圍不一致的問題
         /// </summary>
         private List<FloatingObjectInfo>? GetCellFloatingObjects(ExcelWorksheet worksheet, ExcelRange cell)
         {
@@ -1949,16 +1704,23 @@ namespace ExcelReaderAPI.Controllers
 
                             _logger.LogInformation($"發現浮動物件: '{drawing.Name ?? "未命名"}' 類型: {drawing.GetType().Name} 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
 
-                            // ⭐ 修復: 使用與 GetCellImages 完全相同的精確判斷邏輯
-                            // 只在浮動物件的起始儲存格（From位置）添加浮動物件
-                            // 避免同一個浮動物件被重複添加到多個儲存格
-                            bool shouldInclude = (fromRow >= cellStartRow && fromRow <= cellEndRow &&
-                                                 fromCol >= cellStartCol && fromCol <= cellEndCol);
+                            // ⭐ 新邏輯: 解決合併儲存格與浮動物件範圍不一致的問題
+                            // 檢查浮動物件是否與儲存格範圍有交集
+                            bool hasOverlap = !(toRow < cellStartRow || fromRow > cellEndRow ||
+                                               toCol < cellStartCol || fromCol > cellEndCol);
+
+                            // ⭐ 關鍵修復: 只在浮動物件的起始位置（左上角）儲存格中添加物件
+                            // 這樣可以避免在合併儲存格的每個子儲存格中都顯示相同的浮動物件
+                            bool isAnchorCell = (fromRow == cellStartRow && fromCol == cellStartCol);
+
+                            // ⭐ 額外檢查: 如果是合併儲存格，需要確認浮動物件確實在範圍內
+                            bool shouldInclude = hasOverlap && isAnchorCell;
 
                             // 記錄詳細的檢查結果
                             _logger.LogDebug($"浮動物件 '{drawing.Name ?? "未命名"}' 位置檢查: " +
-                                           $"From({fromRow},{fromCol}) 是否在儲存格 [{cellStartRow},{cellEndRow}] x [{cellStartCol},{cellEndCol}] 內? " +
-                                           $"結果: {shouldInclude}");
+                                           $"浮動物件範圍: Row {fromRow}-{toRow}, Col {fromCol}-{toCol} | " +
+                                           $"儲存格範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol} | " +
+                                           $"有交集: {hasOverlap} | 是錨點儲存格: {isAnchorCell} | 結果: {shouldInclude}");
 
                             if (shouldInclude)
                             {
@@ -1998,7 +1760,7 @@ namespace ExcelReaderAPI.Controllers
                                     };
 
                                     floatingObjects.Add(floatingObjectInfo);
-                                    _logger.LogInformation($"成功解析浮動物件: {floatingObjectInfo.Name}, 類型: {floatingObjectInfo.ObjectType}");
+                                    _logger.LogInformation($"✅ 成功解析浮動物件: {floatingObjectInfo.Name}, 類型: {floatingObjectInfo.ObjectType}");
                                 }
                                 catch (Exception objEx)
                                 {
@@ -3730,10 +3492,7 @@ namespace ExcelReaderAPI.Controllers
                             excludedCells.Remove(cellAddress); // 刪去法:處理後移除
                             continue; // 跳過此儲存格,不加入 rowData
                         }
-                        if(cell.Address == "A30")
-                        {
-                            var debug = 0;
-                        }
+                        // 調試用程式碼已移除
                         var cellInfo = CreateCellInfo(cell, worksheet, imageIndex, colorCache, mergedCellIndex);
 
                         // 如果遇到主合併儲存格,建立待排除集合

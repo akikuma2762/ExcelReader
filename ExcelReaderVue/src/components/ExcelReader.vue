@@ -1010,6 +1010,22 @@ h1 {
   padding: 2px;
   text-align: left;
   white-space: nowrap;
+  /* 強制使用設定的高度，避免合併儲存格影響其他行的高度 */
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* 針對合併儲存格的特殊處理 */
+.data-table td[rowspan] {
+  /* 合併儲存格使用 top 對齊，避免影響其他儲存格 */
+  vertical-align: top !important;
+}
+
+/* 確保沒有合併的儲存格能維持設定的高度 */
+.data-table td:not([rowspan]) {
+  /* 對於非合併儲存格，使用行內設定的高度 */
+  height: auto;
+  min-height: inherit;
 }
 
 /* 當有動態邊框時，讓動態邊框優先 */
@@ -1112,6 +1128,7 @@ h1 {
 
 .cell-content {
   position: relative;
+  display: inline-block;
 }
 
 .format-controls {
