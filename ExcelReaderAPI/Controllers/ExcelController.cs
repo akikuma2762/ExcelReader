@@ -21,7 +21,7 @@ namespace ExcelReaderAPI.Controllers
 
         // 安全機制：防止無窮迴圈的常數
         private const int MAX_SEARCH_OPERATIONS = 1000;
-        private const int MAX_DRAWING_OBJECTS_TO_CHECK = 100;
+        private const int MAX_DRAWING_OBJECTS_TO_CHECK = 999999; // 增加限制，支援更多文字方塊
         private const int MAX_CELLS_TO_SEARCH = 5000;
 
         // 功能開關
@@ -35,9 +35,37 @@ namespace ExcelReaderAPI.Controllers
 
         // 請求層級的計數器 - 使用 ThreadStatic 避免併發問題
         [ThreadStatic]
-        private static int _globalDrawingObjectCount = 0;
+        private static Dictionary<string, int>? _worksheetDrawingObjectCounts;
         [ThreadStatic]
         private static DateTime _requestStartTime = DateTime.MinValue;
+
+        /// <summary>
+        /// 取得或初始化工作表繪圖物件計數器
+        /// </summary>
+        private int GetWorksheetDrawingObjectCount(string worksheetName)
+        {
+            _worksheetDrawingObjectCounts ??= new Dictionary<string, int>();
+            return _worksheetDrawingObjectCounts.TryGetValue(worksheetName, out var count) ? count : 0;
+        }
+
+        /// <summary>
+        /// 增加工作表繪圖物件計數器
+        /// </summary>
+        private int IncrementWorksheetDrawingObjectCount(string worksheetName)
+        {
+            _worksheetDrawingObjectCounts ??= new Dictionary<string, int>();
+            var count = GetWorksheetDrawingObjectCount(worksheetName) + 1;
+            _worksheetDrawingObjectCounts[worksheetName] = count;
+            return count;
+        }
+
+        /// <summary>
+        /// 重置工作表繪圖物件計數器
+        /// </summary>
+        private void ResetWorksheetDrawingObjectCounts()
+        {
+            _worksheetDrawingObjectCounts?.Clear();
+        }
 
         /// <summary>
         /// 工作表圖片位置索引 - 用於效能優化
@@ -1400,11 +1428,11 @@ namespace ExcelReaderAPI.Controllers
 
                 _logger.LogDebug($"檢查儲存格 {cell.Address} 的圖片，範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol}");
 
-                // 初始化全域計數器（只在第一次請求時）
+                // 初始化計數器（只在第一次請求時）
                 if (_requestStartTime == DateTime.MinValue)
                 {
                     _requestStartTime = DateTime.Now;
-                    _globalDrawingObjectCount = 0;
+                    ResetWorksheetDrawingObjectCounts();
                 }
 
                 // 安全檢查：如果已經檢查太多物件，直接跳過這個儲存格
@@ -1417,7 +1445,7 @@ namespace ExcelReaderAPI.Controllers
                 // 1. 檢查所有工作表中的圖片 (採用寬鬆匹配策略)
                 if (worksheet.Drawings != null && worksheet.Drawings.Any())
                 {
-                    _logger.LogDebug($"工作表 '{worksheet.Name}' 包含 {worksheet.Drawings.Count} 個繪圖物件 (已檢查: {_globalDrawingObjectCount})");
+                    _logger.LogDebug($"工作表 '{worksheet.Name}' 包含 {worksheet.Drawings.Count} 個繪圖物件 (已檢查: {GetWorksheetDrawingObjectCount(worksheet.Name)})");
 
                     foreach (var drawing in worksheet.Drawings)
                     {
@@ -1644,7 +1672,9 @@ namespace ExcelReaderAPI.Controllers
         /// ⭐ 修復: 解決合併儲存格與浮動圖片跨足範圍不一致的問題
         /// </summary>
         private List<FloatingObjectInfo>? GetCellFloatingObjects(ExcelWorksheet worksheet, ExcelRange cell)
-        {
+        { if(cell.Address.Contains("B19")){
+            var a = 0;
+        }
             try
             {
                 var floatingObjects = new List<FloatingObjectInfo>();
@@ -1658,23 +1688,26 @@ namespace ExcelReaderAPI.Controllers
                 _logger.LogDebug($"檢查儲存格 {cell.Address} 的浮動物件，範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol}");
 
                 // 安全檢查：如果已經檢查太多物件，直接跳過這個儲存格
-                if (_globalDrawingObjectCount > MAX_DRAWING_OBJECTS_TO_CHECK)
+                var currentCount = GetWorksheetDrawingObjectCount(worksheet.Name);
+                if (currentCount > MAX_DRAWING_OBJECTS_TO_CHECK)
                 {
-                    _logger.LogDebug($"儲存格 {cell.Address} 跳過浮動物件檢查 - 已達到檢查限制");
+                    _logger.LogDebug($"儲存格 {cell.Address} 跳過浮動物件檢查 - 已達到檢查限制 ({currentCount})");
                     return null;
                 }
 
                 // 檢查所有工作表中的繪圖物件（排除圖片）
                 if (worksheet.Drawings != null && worksheet.Drawings.Any())
                 {
-                    _logger.LogDebug($"工作表 '{worksheet.Name}' 包含 {worksheet.Drawings.Count} 個繪圖物件 (已檢查: {_globalDrawingObjectCount})");
+                    currentCount = GetWorksheetDrawingObjectCount(worksheet.Name);
+                    _logger.LogDebug($"工作表 '{worksheet.Name}' 包含 {worksheet.Drawings.Count} 個繪圖物件 (已檢查: {currentCount})");
 
                     foreach (var drawing in worksheet.Drawings)
                     {
                         // 安全檢查：防止處理過多物件
-                        if (++_globalDrawingObjectCount > MAX_DRAWING_OBJECTS_TO_CHECK)
+                        currentCount = IncrementWorksheetDrawingObjectCount(worksheet.Name);
+                        if (currentCount > MAX_DRAWING_OBJECTS_TO_CHECK)
                         {
-                            _logger.LogWarning($"已檢查 {MAX_DRAWING_OBJECTS_TO_CHECK} 個繪圖物件，停止進一步檢查以避免效能問題");
+                            _logger.LogWarning($"工作表 '{worksheet.Name}' 已檢查 {currentCount} 個繪圖物件，停止進一步檢查以避免效能問題");
                             return floatingObjects.Any() ? floatingObjects : null;
                         }
 
@@ -1713,11 +1746,36 @@ namespace ExcelReaderAPI.Controllers
                             bool hasOverlap = !(toRow < cellStartRow || fromRow > cellEndRow ||
                                                toCol < cellStartCol || fromCol > cellEndCol);
 
-                            // ⭐ 關鍵修復: 只在浮動物件的起始位置（左上角）儲存格中添加物件
-                            // 這樣可以避免在合併儲存格的每個子儲存格中都顯示相同的浮動物件
-                            bool isAnchorCell = (fromRow == cellStartRow && fromCol == cellStartCol);
+                            // ⭐ 關鍵修復: 改進錨點檢查邏輯，解決合併儲存格導致的文字方塊檢測問題
+                            // 檢查浮動物件是否應該歸屬於當前儲存格
+                            bool isAnchorCell = false;
+                            
+                            // 情況1: 浮動物件的起始位置在當前儲存格範圍內
+                            bool floatingStartsInCell = (fromRow >= cellStartRow && fromRow <= cellEndRow &&
+                                                        fromCol >= cellStartCol && fromCol <= cellEndCol);
+                            
+                            // 情況2: 當前儲存格是浮動物件覆蓋範圍中的第一個儲存格（左上角優先原則）
+                            bool isCellTopLeftOfFloating = (cellStartRow <= fromRow && cellStartCol <= fromCol);
+                            
+                            // 情況3: 對於合併儲存格，檢查是否為合併範圍的主儲存格
+                            bool isMergedCellAnchor = (cellStartRow == cellEndRow && cellStartCol == cellEndCol) || // 單一儲存格
+                                                     (cell.Merge && cellStartRow == cell.Start.Row && cellStartCol == cell.Start.Column); // 合併儲存格的主儲存格
+                            
+                            // 根據不同情況判斷是否為錨點
+                            if (floatingStartsInCell && isMergedCellAnchor)
+                            {
+                                isAnchorCell = true; // 浮動物件在儲存格內且該儲存格是主儲存格
+                            }
+                            else if (!cell.Merge && floatingStartsInCell)
+                            {
+                                isAnchorCell = true; // 非合併儲存格且浮動物件在其內
+                            }
+                            else if (cell.Merge && cellStartRow == fromRow && cellStartCol == fromCol)
+                            {
+                                isAnchorCell = true; // 合併儲存格且位置完全匹配
+                            }
 
-                            // ⭐ 額外檢查: 如果是合併儲存格，需要確認浮動物件確實在範圍內
+                            // ⭐ 最終決定: 浮動物件需要有交集且符合錨點條件
                             bool shouldInclude = hasOverlap && isAnchorCell;
 
                             // 記錄詳細的檢查結果
@@ -3738,16 +3796,8 @@ namespace ExcelReaderAPI.Controllers
                     });
                 }
 
-                // 讀取第一行內容作為內容標頭，保留格式信息 (使用索引)
-                var contentHeaders = new List<object>();
-                for (int col = 1; col <= colCount; col++)
-                {
-                    var headerCell = worksheet.Cells[1, col];
-                    contentHeaders.Add(CreateCellInfo(headerCell, worksheet, imageIndex));
-                }
-
-                // 提供兩種標頭：Excel 欄位標頭和內容標頭
-                excelData.Headers = new[] { columnHeaders.ToArray(), contentHeaders.ToArray() };
+                // 只提供欄位標頭（A、B、C...），避免與資料行重複
+                excelData.Headers = new[] { columnHeaders.ToArray() };
 
                 // 讀取資料行，保留原始格式（包含Rich Text） - 使用索引 + 快取優化 + 並行處理
                 var processingStopwatch = System.Diagnostics.Stopwatch.StartNew();
