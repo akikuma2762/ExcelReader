@@ -10,7 +10,10 @@
     <PackageReference Include="EPPlus" Version="8.*" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.8" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.4" />
+
     <PackageReference Include="System.IO.Packaging" Version="8.0.0" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.10" />
+    <PackageReference Include="SkiaSharp" Version="2.88.8" />
   </ItemGroup>
 
 </Project>

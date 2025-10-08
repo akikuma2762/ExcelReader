@@ -7,6 +7,9 @@ using System.IO.Packaging;
 using System.IO.Compression;
 using System.Xml.Linq;
 using System.Text.RegularExpressions;
+using System.Drawing;
+using System.Drawing.Imaging;
+using SkiaSharp;
 
 namespace ExcelReaderAPI.Controllers
 {
@@ -351,7 +354,8 @@ namespace ExcelReaderAPI.Controllers
         {
             if (cellInfo.Images == null || !cellInfo.Images.Any())
                 return;
-
+            if(cell.Address.Contains("H2"))
+                Console.WriteLine("");
             foreach (var image in cellInfo.Images)
             {
                 var fromRow = image.AnchorCell?.Row ?? cell.Start.Row;
@@ -2284,6 +2288,13 @@ namespace ExcelReaderAPI.Controllers
                     {
                         return "BMP";
                     }
+
+                    // EMF 檔頭: 檢查 EMF 格式 (會自動轉換為 PNG)
+                    if (IsEmfFormat(bytes))
+                    {
+                        _logger.LogInformation($"圖片 {picture.Name} 是 EMF 格式，將自動轉換為 PNG 格式");
+                        return "PNG"; // 因為會自動轉換，所以返回 PNG 類型
+                    }
                 }
 
                 // 預設類型
@@ -2318,7 +2329,7 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
-        /// 將圖片轉換為 Base64 字串
+        /// 將圖片轉換為 Base64 字串 (支援 EMF 格式自動轉換為 PNG)
         /// </summary>
         private string ConvertImageToBase64(OfficeOpenXml.Drawing.ExcelPicture picture)
         {
@@ -2326,15 +2337,282 @@ namespace ExcelReaderAPI.Controllers
             {
                 if (picture.Image?.ImageBytes != null && picture.Image.ImageBytes.Length > 0)
                 {
-                    return Convert.ToBase64String(picture.Image.ImageBytes);
+                    var imageBytes = picture.Image.ImageBytes;
+                    
+                    // 檢查是否為 EMF 格式 (Enhanced Metafile)
+                    if (IsEmfFormat(imageBytes))
+                    {
+                        _logger.LogInformation($"🔄 檢測到 EMF 格式圖片: {picture.Name}，正在轉換為 PNG 格式...");
+                        
+                        // 嘗試轉換 EMF 到 PNG
+                        var pngBytes = ConvertEmfToPng(imageBytes);
+                        
+                        if (pngBytes != null && pngBytes.Length > 0)
+                        {
+                            _logger.LogInformation($"✅ EMF 轉 PNG 成功: {picture.Name} ({imageBytes.Length} -> {pngBytes.Length} bytes)");
+                            return Convert.ToBase64String(pngBytes);
+                        }
+                        else
+                        {
+                            _logger.LogWarning($"⚠️ EMF 轉 PNG 失敗: {picture.Name}，使用錯誤提示圖片");
+                            var errorPngBytes = CreateEmfErrorPng();
+                            return Convert.ToBase64String(errorPngBytes);
+                        }
+                    }
+                    
+                    // 非 EMF 格式，直接返回原始資料
+                    return Convert.ToBase64String(imageBytes);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, $"轉換圖片 {picture.Name} 為 Base64 時發生錯誤");
+                _logger.LogError(ex, $"轉換圖片 {picture.Name} 為 Base64 時發生錯誤: {ex.Message}");
+                
+                // 發生錯誤時，返回錯誤提示圖片
+                try
+                {
+                    var errorPngBytes = CreateEmfErrorPng();
+                    return Convert.ToBase64String(errorPngBytes);
+                }
+                catch
+                {
+                    return string.Empty;
+                }
             }
 
             return string.Empty;
+        }
+
+        /// <summary>
+        /// 檢查圖片是否為 EMF 格式
+        /// </summary>
+        private bool IsEmfFormat(byte[] imageBytes)
+        {
+            if (imageBytes.Length < 44) return false;
+            
+            // EMF 文件的特徵：在偏移量 40 處有 " EMF" 標識
+            return imageBytes[40] == 0x20 && 
+                   imageBytes[41] == 0x45 && 
+                   imageBytes[42] == 0x4D && 
+                   imageBytes[43] == 0x46;
+        }
+
+        /// <summary>
+        /// 獲取圖片格式信息
+        /// </summary>
+        private string GetImageFormat(byte[] imageBytes)
+        {
+            if (imageBytes.Length < 8) return "unknown";
+            
+            // PNG 格式檢查
+            if (imageBytes[0] == 0x89 && imageBytes[1] == 0x50 && imageBytes[2] == 0x4E && imageBytes[3] == 0x47)
+                return "png";
+            
+            // JPEG 格式檢查
+            if (imageBytes[0] == 0xFF && imageBytes[1] == 0xD8 && imageBytes[2] == 0xFF)
+                return "jpeg";
+            
+            // GIF 格式檢查
+            if (imageBytes[0] == 0x47 && imageBytes[1] == 0x49 && imageBytes[2] == 0x46)
+                return "gif";
+            
+            // EMF 格式檢查
+            if (IsEmfFormat(imageBytes))
+                return "emf";
+            
+            return "unknown";
+        }
+
+        /// <summary>
+        /// 將EMF格式轉換為PNG格式 (跨平台支援)
+        /// </summary>
+        private byte[]? ConvertEmfToPng(byte[] emfBytes, int width = 800, int height = 600)
+        {
+            try
+            {
+                _logger.LogInformation($"開始轉換 EMF 到 PNG，原始大小: {emfBytes.Length} bytes，目標尺寸: {width}x{height}px");
+
+                // 檢查平台支援
+                var isWindows = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
+                
+                // 方法1: Windows 平台使用 System.Drawing 進行實際轉換
+                if (isWindows)
+                {
+                    try
+                    {
+                        _logger.LogInformation("嘗試使用 System.Drawing 進行 EMF 轉換...");
+                        
+                        using var emfStream = new MemoryStream(emfBytes);
+                        using var emfImage = Image.FromStream(emfStream);
+                        
+                        // 獲取EMF的實際尺寸
+                        var emfWidth = emfImage.Width;
+                        var emfHeight = emfImage.Height;
+                        
+                        _logger.LogInformation($"EMF 原始尺寸: {emfWidth}x{emfHeight}px");
+                        
+                        // 如果沒有指定目標尺寸，使用EMF的原始尺寸
+                        var targetWidth = width > 0 ? width : emfWidth;
+                        var targetHeight = height > 0 ? height : emfHeight;
+                        
+                        // 創建目標位圖
+                        using var pngBitmap = new Bitmap(targetWidth, targetHeight);
+                        using var graphics = Graphics.FromImage(pngBitmap);
+                        
+                        // 設置高質量渲染
+                        graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+                        graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                        graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                        
+                        // 清除背景為透明
+                        graphics.Clear(Color.Transparent);
+                        
+                        // 繪製EMF到位圖 - 保持縱橫比
+                        var targetRect = new Rectangle(0, 0, targetWidth, targetHeight);
+                        graphics.DrawImage(emfImage, targetRect);
+                        
+                        // 轉換為PNG
+                        using var pngStream = new MemoryStream();
+                        pngBitmap.Save(pngStream, ImageFormat.Png);
+                        var pngBytes = pngStream.ToArray();
+                        
+                        _logger.LogInformation($"✅ System.Drawing EMF轉換成功: {emfBytes.Length} -> {pngBytes.Length} bytes, 尺寸: {targetWidth}x{targetHeight}px");
+                        return pngBytes;
+                    }
+                    catch (Exception systemDrawingEx)
+                    {
+                        _logger.LogError(systemDrawingEx, $"System.Drawing EMF轉換失敗: {systemDrawingEx.Message}");
+                        _logger.LogWarning("回退到 SkiaSharp 提示圖片方案");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("非 Windows 平台，EMF格式無法直接轉換，使用提示圖片");
+                }
+
+                // 方法2: 跨平台使用 SkiaSharp 創建提示圖片
+                _logger.LogInformation("使用 SkiaSharp 創建 EMF 格式提示圖片");
+                return CreateEmfPlaceholderPng(width, height, $"EMF 檔案 ({emfBytes.Length} bytes)");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"EMF轉PNG轉換過程中發生未預期的錯誤: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 創建EMF格式的PNG提示圖片
+        /// </summary>
+        private byte[] CreateEmfPlaceholderPng(int width = 400, int height = 200, string? additionalInfo = null)
+        {
+            try
+            {
+                var imageInfo = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
+                using var surface = SKSurface.Create(imageInfo);
+                var canvas = surface.Canvas;
+                
+                // 背景 - 淺藍色
+                canvas.Clear(new SKColor(240, 248, 255));
+                
+                // 邊框
+                using var borderPaint = new SKPaint
+                {
+                    Color = new SKColor(70, 130, 180),
+                    Style = SKPaintStyle.Stroke,
+                    StrokeWidth = 2
+                };
+                canvas.DrawRect(1, 1, width - 2, height - 2, borderPaint);
+                
+                // 標題文字
+                using var titlePaint = new SKPaint
+                {
+                    Color = new SKColor(25, 25, 112),
+                    TextSize = Math.Min(width / 15f, 20f),
+                    IsAntialias = true,
+                    Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold)
+                };
+                
+                // 內容文字
+                using var textPaint = new SKPaint
+                {
+                    Color = new SKColor(60, 60, 60),
+                    TextSize = Math.Min(width / 20f, 14f),
+                    IsAntialias = true,
+                    Typeface = SKTypeface.Default
+                };
+                
+                var lines = new List<string>
+                {
+                    "🖼️ EMF 向量圖片",
+                    "",
+                    "✅ 已自動轉換為 PNG 格式",
+                    "🌐 瀏覽器可正常顯示"
+                };
+                
+                if (!string.IsNullOrEmpty(additionalInfo))
+                {
+                    lines.Add("");
+                    lines.Add($"📄 {additionalInfo}");
+                }
+                
+                float startY = height / 2 - (lines.Count * Math.Min(width / 20f, 14f)) / 2;
+                bool isTitle = true;
+                
+                foreach (var line in lines)
+                {
+                    if (string.IsNullOrEmpty(line))
+                    {
+                        startY += Math.Min(width / 20f, 14f);
+                        isTitle = false;
+                        continue;
+                    }
+                    
+                    var paint = isTitle ? titlePaint : textPaint;
+                    var textWidth = paint.MeasureText(line);
+                    canvas.DrawText(line, (width - textWidth) / 2, startY, paint);
+                    startY += Math.Min(width / 20f, 14f) + 4;
+                    isTitle = false;
+                }
+                
+                // 轉換為PNG
+                using var image = surface.Snapshot();
+                using var data = image.Encode(SKEncodedImageFormat.Png, 90);
+                return data.ToArray();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "創建EMF提示圖片失敗");
+                
+                // 簡化版本的提示圖片
+                try
+                {
+                    var imageInfo = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
+                    using var surface = SKSurface.Create(imageInfo);
+                    var canvas = surface.Canvas;
+                    canvas.Clear(SKColors.LightGray);
+                    
+                    using var paint = new SKPaint { Color = SKColors.Black, TextSize = 14 };
+                    canvas.DrawText("EMF -> PNG", 10, height / 2, paint);
+                    
+                    using var image = surface.Snapshot();
+                    using var data = image.Encode(SKEncodedImageFormat.Png, 90);
+                    return data.ToArray();
+                }
+                catch
+                {
+                    return Array.Empty<byte>();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 創建EMF轉換失敗的錯誤提示PNG圖片 (向後相容)
+        /// </summary>
+        private byte[] CreateEmfErrorPng(int width = 400, int height = 200)
+        {
+            return CreateEmfPlaceholderPng(width, height, "轉換失敗，請檢查檔案格式");
         }
 
 

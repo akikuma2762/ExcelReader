@@ -117,6 +117,22 @@
                           </div>
                         </div>
                         <!-- 正常圖片 -->
+                        <!-- EMF 格式 (已轉換為 PNG) -->
+                        <div v-else-if="image.imageType.toLowerCase() === 'emf'" class="emf-converted-container">
+                          <img
+                            :src="`data:image/png;base64,${image.base64Data}`"
+                            :alt="image.name"
+                            :title="`${image.name} - EMF 格式已轉換為 PNG: ${image.width}x${image.height}px, ${formatFileSize(image.fileSize)}`"
+                            class="cell-image emf-converted"
+                            :style="{
+                              width: image.width > 0 ? image.width + 'px' : 'auto',
+                              height: image.height > 0 ? image.height + 'px' : 'auto'
+                            }"
+                            @click="openImageModal(image)"
+                          />
+                          <div class="emf-badge">EMF→PNG</div>
+                        </div>
+                        <!-- 一般圖片 -->
                         <img
                           v-else
                           :src="`data:image/${image.imageType.toLowerCase()};base64,${image.base64Data}`"
@@ -218,7 +234,22 @@
         <button @click="closeImageModal" class="close-btn">×</button>
       </div>
       <div class="modal-body">
+        <!-- EMF 格式 (已轉換) -->
+        <div v-if="selectedImage.imageType.toLowerCase() === 'emf'">
+          <img
+            :src="`data:image/png;base64,${selectedImage.base64Data}`"
+            :alt="selectedImage.name"
+            class="modal-image emf-converted-modal"
+          />
+          <div class="emf-modal-info">
+            <div class="emf-info-badge">✅ EMF 格式已自動轉換為 PNG</div>
+            <p>原始格式：Enhanced Metafile (.emf) - Windows 向量圖形格式</p>
+            <p>為了在瀏覽器中正常顯示，系統已自動將此圖片轉換為 PNG 格式</p>
+          </div>
+        </div>
+        <!-- 一般圖片 -->
         <img
+          v-else
           :src="`data:image/${selectedImage.imageType.toLowerCase()};base64,${selectedImage.base64Data}`"
           :alt="selectedImage.name"
           class="modal-image"
@@ -1456,5 +1487,156 @@ h1 {
 
 .image-details a:hover {
   text-decoration: underline;
+}
+
+/* EMF 格式樣式 - 已轉換為 PNG */
+.emf-converted-container {
+  position: relative;
+  display: inline-block;
+}
+
+.emf-converted {
+  border: 2px solid #28a745;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(40, 167, 69, 0.1);
+}
+
+.emf-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  background: #28a745;
+  color: white;
+  font-size: 10px;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  z-index: 10;
+}
+
+/* EMF 格式樣式 - 舊版 (保留以防需要) */
+.emf-placeholder {
+  display: flex;
+  align-items: center;
+  padding: 8px;
+  border: 2px dashed #ffc107;
+  background: #fff3cd;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  min-height: 60px;
+  max-width: 200px;
+}
+
+.emf-placeholder:hover {
+  background: #fff3a0;
+}
+
+.emf-icon {
+  font-size: 24px;
+  margin-right: 8px;
+}
+
+.emf-text {
+  text-align: left;
+}
+
+.emf-text div:first-child {
+  font-weight: bold;
+  color: #856404;
+}
+
+.emf-note {
+  font-size: 11px;
+  color: #856404;
+  opacity: 0.8;
+}
+
+/* EMF 模態框樣式 - 新版轉換後 */
+.emf-converted-modal {
+  border: 3px solid #28a745;
+  border-radius: 8px;
+  box-shadow: 0 4px 8px rgba(40, 167, 69, 0.2);
+}
+
+.emf-modal-info {
+  margin-top: 16px;
+  padding: 16px;
+  background: #d4edda;
+  border: 1px solid #c3e6cb;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.emf-info-badge {
+  display: inline-block;
+  background: #28a745;
+  color: white;
+  font-weight: bold;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+.emf-modal-info p {
+  color: #155724;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+/* EMF 模態框樣式 - 舊版 (保留) */
+.emf-modal-placeholder {
+  text-align: center;
+  padding: 40px 20px;
+  background: #fff3cd;
+  border: 2px dashed #ffc107;
+  border-radius: 8px;
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.emf-modal-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+}
+
+.emf-modal-content h4 {
+  color: #856404;
+  margin-bottom: 12px;
+}
+
+.emf-modal-content p {
+  color: #856404;
+  margin-bottom: 8px;
+}
+
+.emf-warning {
+  background: #f8d7da;
+  color: #721c24 !important;
+  padding: 8px;
+  border-radius: 4px;
+  border: 1px solid #f5c6cb;
+  margin: 12px 0 !important;
+}
+
+.emf-suggestions {
+  text-align: left;
+  background: white;
+  padding: 16px;
+  border-radius: 4px;
+  margin-top: 16px;
+  border: 1px solid #ffc107;
+}
+
+.emf-suggestions ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.emf-suggestions li {
+  margin: 4px 0;
+  color: #495057;
 }
 </style>
