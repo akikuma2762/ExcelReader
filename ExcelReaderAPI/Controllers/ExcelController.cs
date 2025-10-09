@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
 using OfficeOpenXml;
 using ExcelReaderAPI.Models;
+using ExcelReaderAPI.Models.Caches;
+using ExcelReaderAPI.Models.Enums;
+using ExcelReaderAPI.Services.Interfaces;
 using ExcelReaderAPI.Utils;
 using System.Data;
 using System.IO.Packaging;
@@ -17,6 +20,10 @@ namespace ExcelReaderAPI.Controllers
     [Route("api/[controller]")]
     public class ExcelController : ControllerBase
     {
+        private readonly IExcelProcessingService _processingService;
+        private readonly IExcelImageService _imageService;
+        private readonly IExcelCellService _cellService;
+        private readonly IExcelColorService _colorService;
         private readonly ILogger<ExcelController> _logger;
 
         // 安全機制：防止無窮迴圈的常數
@@ -67,212 +74,18 @@ namespace ExcelReaderAPI.Controllers
             _worksheetDrawingObjectCounts?.Clear();
         }
 
-        /// <summary>
-        /// 工作表圖片位置索引 - 用於效能優化
-        /// 一次性建立索引,避免每個儲存格都遍歷所有 Drawings
-        /// 複雜度: 建立 O(D), 查詢 O(1), D = Drawings 數量
-        /// </summary>
-        private class WorksheetImageIndex
+        public ExcelController(
+            IExcelProcessingService processingService,
+            IExcelImageService imageService,
+            IExcelCellService cellService,
+            IExcelColorService colorService,
+            ILogger<ExcelController> logger)
         {
-            // Key: "Row_Column" (例: "5_3" 代表 Row=5, Col=3)
-            // Value: 該儲存格起始位置的所有圖片
-            private readonly Dictionary<string, List<OfficeOpenXml.Drawing.ExcelPicture>> _cellImageMap;
-
-            public WorksheetImageIndex(ExcelWorksheet worksheet)
-            {
-                _cellImageMap = new Dictionary<string, List<OfficeOpenXml.Drawing.ExcelPicture>>();
-
-                if (worksheet.Drawings == null || !worksheet.Drawings.Any())
-                    return;
-
-                // 一次性遍歷所有繪圖物件建立索引
-                foreach (var drawing in worksheet.Drawings)
-                {
-                    if (drawing is OfficeOpenXml.Drawing.ExcelPicture picture && picture.From != null)
-                    {
-                        int fromRow = picture.From.Row + 1; // EPPlus 使用 0-based, 轉為 1-based
-                        int fromCol = picture.From.Column + 1;
-                        string key = $"{fromRow}_{fromCol}";
-
-                        if (!_cellImageMap.ContainsKey(key))
-                            _cellImageMap[key] = new List<OfficeOpenXml.Drawing.ExcelPicture>();
-
-                        _cellImageMap[key].Add(picture);
-                    }
-                }
-            }
-
-            /// <summary>
-            /// 快速查詢指定儲存格的圖片 - O(1) 複雜度
-            /// </summary>
-            public List<OfficeOpenXml.Drawing.ExcelPicture>? GetImagesAtCell(int row, int col)
-            {
-                string key = $"{row}_{col}";
-                return _cellImageMap.TryGetValue(key, out var images) && images.Any() ? images : null;
-            }
-
-            /// <summary>
-            /// 檢查指定儲存格是否有圖片 - O(1) 複雜度
-            /// </summary>
-            public bool HasImagesAtCell(int row, int col)
-            {
-                string key = $"{row}_{col}";
-                return _cellImageMap.ContainsKey(key) && _cellImageMap[key].Any();
-            }
-
-            /// <summary>
-            /// 取得總圖片數量
-            /// </summary>
-            public int TotalImageCount => _cellImageMap.Values.Sum(list => list.Count);
-        }
-
-        /// <summary>
-        /// 樣式快取 - 避免重複創建相同的樣式物件 (執行緒安全)
-        /// Phase 3.2: 使用 ConcurrentDictionary 支援並行處理
-        /// 複雜度: O(1) 查詢, 大幅減少 GC 壓力
-        /// </summary>
-        private class StyleCache
-        {
-            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, FontInfo> _fontCache = new();
-            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, BorderInfo> _borderCache = new();
-            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, FillInfo> _fillCache = new();
-
-            public string GetFontCacheKey(ExcelRange cell)
-            {
-                return GetFontKey(cell.Style.Font, cell.Style.Fill, cell.Style.Font.Color);
-            }
-
-            public void CacheFont(string key, FontInfo fontInfo)
-            {
-                _fontCache[key] = fontInfo;
-            }
-
-            public FontInfo? GetCachedFont(string key)
-            {
-                _fontCache.TryGetValue(key, out var fontInfo);
-                return fontInfo;
-            }
-
-            public FillInfo GetOrCreateFill(ExcelRange cell)
-            {
-                var key = GetFillKey(cell.Style.Fill);
-                if (!_fillCache.TryGetValue(key, out var fillInfo))
-                {
-                    fillInfo = new FillInfo
-                    {
-                        PatternType = cell.Style.Fill.PatternType.ToString(),
-                        BackgroundColor = GetBackgroundColor(cell),
-                        PatternColor = GetColorFromExcelColor(cell.Style.Fill.PatternColor)
-                    };
-                    _fillCache[key] = fillInfo;
-                }
-                return fillInfo;
-            }
-
-            private string GetFontKey(OfficeOpenXml.Style.ExcelFont font, OfficeOpenXml.Style.ExcelFill fill, OfficeOpenXml.Style.ExcelColor color)
-            {
-                return $"{font.Name}|{font.Size}|{font.Bold}|{font.Italic}|{font.UnderLine}|{font.Strike}|{color.Rgb ?? color.Theme.ToString()}";
-            }
-
-            private string GetFillKey(OfficeOpenXml.Style.ExcelFill fill)
-            {
-                return $"{fill.PatternType}|{fill.BackgroundColor.Rgb}|{fill.BackgroundColor.Theme}|{fill.PatternColor.Rgb}";
-            }
-
-            // 這些方法需要訪問 ExcelController 的方法,稍後會調整
-            private string? GetColorFromExcelColor(OfficeOpenXml.Style.ExcelColor excelColor)
-            {
-                // 佔位符,稍後實作
-                return null;
-            }
-
-            private string? GetBackgroundColor(ExcelRange cell)
-            {
-                // 佔位符,稍後實作
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// 顏色轉換快取 - 避免重複轉換相同顏色 (執行緒安全)
-        /// Phase 3.2: 使用 ConcurrentDictionary 支援並行處理
-        /// </summary>
-        private class ColorCache
-        {
-            private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _cache = new();
-
-            public string GetCacheKey(OfficeOpenXml.Style.ExcelColor color)
-            {
-                if (color == null) return "null";
-                return $"{color.Rgb}|{color.Theme}|{color.Tint}|{color.Indexed}";
-            }
-
-            public void CacheColor(string key, string? color)
-            {
-                _cache[key] = color;
-            }
-
-            public bool TryGetCachedColor(string key, out string? color)
-            {
-                return _cache.TryGetValue(key, out color);
-            }
-        }
-
-        /// <summary>
-        /// 合併儲存格索引 - 快速查詢儲存格是否在合併範圍內
-        /// 複雜度: 建立 O(M×C), 查詢 O(1), M=合併範圍數, C=每個範圍的儲存格數
-        /// </summary>
-        private class MergedCellIndex
-        {
-            // Key: "Row_Column", Value: 合併範圍地址 (如 "A1:B2")
-            private readonly Dictionary<string, string> _cellToMergeMap = new();
-
-            public MergedCellIndex(ExcelWorksheet worksheet)
-            {
-                if (worksheet.MergedCells == null || !worksheet.MergedCells.Any())
-                    return;
-
-                foreach (var mergeRange in worksheet.MergedCells)
-                {
-                    var range = worksheet.Cells[mergeRange];
-
-                    for (int row = range.Start.Row; row <= range.End.Row; row++)
-                    {
-                        for (int col = range.Start.Column; col <= range.End.Column; col++)
-                        {
-                            var key = $"{row}_{col}";
-                            _cellToMergeMap[key] = mergeRange;
-                        }
-                    }
-                }
-            }
-
-            /// <summary>
-            /// 取得指定儲存格所屬的合併範圍 - O(1) 複雜度
-            /// </summary>
-            public string? GetMergeRange(int row, int col)
-            {
-                _cellToMergeMap.TryGetValue($"{row}_{col}", out var range);
-                return range;
-            }
-
-            /// <summary>
-            /// 檢查指定儲存格是否在合併範圍內 - O(1) 複雜度
-            /// </summary>
-            public bool IsMergedCell(int row, int col)
-            {
-                return _cellToMergeMap.ContainsKey($"{row}_{col}");
-            }
-
-            /// <summary>
-            /// 取得總合併範圍數量
-            /// </summary>
-            public int MergeCount => _cellToMergeMap.Values.Distinct().Count();
-        }
-
-        public ExcelController(ILogger<ExcelController> logger)
-        {
-            _logger = logger;
+            _processingService = processingService ?? throw new ArgumentNullException(nameof(processingService));
+            _imageService = imageService ?? throw new ArgumentNullException(nameof(imageService));
+            _cellService = cellService ?? throw new ArgumentNullException(nameof(cellService));
+            _colorService = colorService ?? throw new ArgumentNullException(nameof(colorService));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         static ExcelController()
@@ -639,17 +452,6 @@ namespace ExcelReaderAPI.Controllers
         }
 
         /// <summary>
-        /// 智能檢測儲存格的主要內容類型
-        /// </summary>
-        private enum CellContentType
-        {
-            Empty,          // 空儲存格
-            TextOnly,       // 純文字內容
-            ImageOnly,      // 純圖片內容
-            Mixed           // 混合內容
-        }
-
-        /// <summary>
         /// 檢測儲存格的主要內容類型 (使用索引優化版 + EPPlus 8.x In-Cell Picture API)
         /// </summary>
         private CellContentType DetectCellContentType(ExcelRange cell, WorksheetImageIndex? imageIndex)
@@ -782,7 +584,7 @@ namespace ExcelReaderAPI.Controllers
             WorksheetImageIndex imageIndex,
             ColorCache? colorCache = null,
             MergedCellIndex? mergedCellIndex = null)
-        {
+         {
             if (cell == null || worksheet == null)
                 throw new ArgumentNullException("Cell or worksheet cannot be null");
 
@@ -973,7 +775,7 @@ namespace ExcelReaderAPI.Controllers
                     }
                     else
                     {
-                        // 回退到原始查詢方式
+                        // 回退到原始查詢方式 - 使用注入的 Service
                         mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
                     }
 
@@ -1075,6 +877,7 @@ namespace ExcelReaderAPI.Controllers
                     }
                     else
                     {
+                        // 使用注入的 Service
                         mergedRange = FindMergedRange(worksheet, cell.Start.Row, cell.Start.Column);
                     }
 
@@ -1093,10 +896,10 @@ namespace ExcelReaderAPI.Controllers
                 }
                 else
                 {
-                    cellInfo.Images = ENABLE_CELL_IMAGES_CHECK ? GetCellImages(rangeToCheck, imageIndex, worksheet) : null;
+                    cellInfo.Images = ENABLE_CELL_IMAGES_CHECK ? _imageService.GetCellImages(rangeToCheck, imageIndex, worksheet) : null;
                 }
 
-                // 圖片跨儲存格處理 - 使用 DRY 共用方法
+                // 圖片跨儲存格處理 - 使用注入的 Service 方法
                 ProcessImageCrossCells(cellInfo, cell, worksheet);
 
                 // 浮動物件 - ⭐ 修復: 只在合併儲存格的主要儲存格中查找浮動物件
@@ -1111,7 +914,7 @@ namespace ExcelReaderAPI.Controllers
                     cellInfo.FloatingObjects = ENABLE_FLOATING_OBJECTS_CHECK ? GetCellFloatingObjects(worksheet, rangeToCheck) : null;
                 }
 
-                // 浮動物件跨儲存格處理 - 使用 DRY 共用方法
+                // 浮動物件跨儲存格處理 - 使用注入的 Service 方法
                 ProcessFloatingObjectCrossCells(cellInfo, cell);
 
                 // 中繼資料
@@ -1159,15 +962,7 @@ namespace ExcelReaderAPI.Controllers
             }
         }
 
-        /// <summary>
-        /// 創建儲存格資訊 (舊版本 - 相容性保留,內部使用索引優化版本)
-        /// </summary>
-        private ExcelCellInfo CreateCellInfo(ExcelRange cell, ExcelWorksheet worksheet)
-        {
-            // 為了保持向後相容,創建臨時索引並調用優化版本
-            var imageIndex = new WorksheetImageIndex(worksheet);
-            return CreateCellInfo(cell, worksheet, imageIndex, null, null);
-        }
+       
 
 
         /// <summary>
@@ -3821,6 +3616,7 @@ namespace ExcelReaderAPI.Controllers
                             continue; // 跳過此儲存格,不加入 rowData
                         }
                         // 調試用程式碼已移除
+                        // ✅ Phase 3: 使用服務層的方法
                         var cellInfo = CreateCellInfo(cell, worksheet, imageIndex, colorCache, mergedCellIndex);
 
                         // 如果遇到主合併儲存格,建立待排除集合
@@ -3896,11 +3692,13 @@ namespace ExcelReaderAPI.Controllers
 
                 // 測試 A1 儲存格
                 var cellA1 = worksheet.Cells["A1"];
-                var contentType = DetectCellContentType(cellA1, worksheet);
+                // ✅ Phase 3: 使用服務層的方法
+                var contentType = _processingService.DetectCellContentType(cellA1, worksheet);
 
                 //_logger.LogInformation($"A1 儲存格內容類型檢測結果: {contentType}");
 
-                var cellInfo = CreateCellInfo(cellA1, worksheet);
+                // ✅ Phase 3: 使用服務層的方法
+                var cellInfo = _processingService.CreateCellInfo(cellA1, worksheet);
 
                 return Ok(new
                 {
@@ -3945,27 +3743,7 @@ namespace ExcelReaderAPI.Controllers
             return Ok(sampleData);
         }
 
-        [HttpGet("download-sample")]
-        public IActionResult DownloadSampleExcel()
-        {
-            try
-            {
-                var fileBytes = ExcelSampleGenerator.GenerateSampleExcel();
-                return File(fileBytes,
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    "範例員工資料.xlsx");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "產生範例Excel檔案時發生錯誤");
-                return StatusCode(500, new UploadResponse
-                {
-                    Success = false,
-                    Message = $"產生範例檔案時發生錯誤: {ex.Message}"
-                });
-            }
-        }
-
+        
         [HttpPost("debug-raw-data")]
         public async Task<ActionResult> DebugRawExcelData(IFormFile file)
         {
@@ -4006,7 +3784,8 @@ namespace ExcelReaderAPI.Controllers
                         DefaultColWidth = worksheet.DefaultColWidth,
                         DefaultRowHeight = worksheet.DefaultRowHeight
                     },
-                    SampleCells = GetRawCellData(worksheet, Math.Min(5, worksheet.Dimension.Rows), Math.Min(5, worksheet.Dimension.Columns)),
+                    // ✅ Phase 3: 使用服務層的方法
+                    SampleCells = _processingService.GetRawCellData(worksheet, Math.Min(5, worksheet.Dimension.Rows), Math.Min(5, worksheet.Dimension.Columns)),
                     AllWorksheets = package.Workbook.Worksheets.Select(ws => new
                     {
                         Name = ws.Name,
@@ -4109,7 +3888,7 @@ namespace ExcelReaderAPI.Controllers
                             ColumnWidth = column.Width > 0 ? column.Width : worksheet.DefaultColWidth,
                             RowHeight = worksheet.Row(row).Height,
                             IsMerged = cell.Merge,
-                            MergedRangeAddress = cell.Merge ? FindMergedRange(worksheet, row, col)?.Address : null
+                            MergedRangeAddress = cell.Merge ? _cellService.FindMergedRange(worksheet, row, col)?.Address : null
                         },
 
                         // Rich Text
