@@ -291,7 +291,7 @@ namespace ExcelReaderAPI.Controllers
         {
             if (ENABLE_VERBOSE_LOGGING)
             {
-                _logger.LogInformation(message);
+                //_logger.LogInformation(message);
             }
         }
 
@@ -358,7 +358,7 @@ namespace ExcelReaderAPI.Controllers
                 cellInfo.Text = floatingObjectText;
             }
 
-            _logger.LogInformation($"✅ 已將浮動物件文字合併到儲存格 {cellAddress}: '{floatingObjectText}'");
+            //_logger.LogInformation($"✅ 已將浮動物件文字合併到儲存格 {cellAddress}: '{floatingObjectText}'");
         }
 
         /// <summary>
@@ -401,7 +401,7 @@ namespace ExcelReaderAPI.Controllers
                     {
                         // 如果儲存格已經合併，檢查圖片是否完全在合併範圍內
                         var mergedRange = cellInfo.Dimensions.MergedRangeAddress;
-                        _logger.LogInformation($"⚠️  儲存格 {cell.Address} 已合併 ({mergedRange})，圖片 '{image.Name}' 範圍: {GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}");
+                        //_logger.LogInformation($"⚠️  儲存格 {cell.Address} 已合併 ({mergedRange})，圖片 '{image.Name}' 範圍: {GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}");
 
                         // 解析合併範圍
                         var rangeParts = mergedRange.Split(':');
@@ -424,7 +424,7 @@ namespace ExcelReaderAPI.Controllers
                             }
                             else
                             {
-                                _logger.LogInformation($"✅ 圖片 '{image.Name}' 完全在已存在的合併範圍內");
+                                //_logger.LogInformation($"✅ 圖片 '{image.Name}' 完全在已存在的合併範圍內");
                             }
                         }
                     }
@@ -434,7 +434,7 @@ namespace ExcelReaderAPI.Controllers
                         int rowSpan = toRow - fromRow + 1;
                         int colSpan = toCol - fromCol + 1;
 
-                        _logger.LogInformation($"圖片 '{image.Name}' 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
+                        //_logger.LogInformation($"圖片 '{image.Name}' 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
 
                         SetCellMergedInfo(cellInfo, fromRow, fromCol, toRow, toCol);
                         break;
@@ -464,7 +464,7 @@ namespace ExcelReaderAPI.Controllers
                 {
                     // 如果儲存格已經合併，檢查浮動物件是否完全在合併範圍內
                     var mergedRange = cellInfo.Dimensions.MergedRangeAddress;
-                    _logger.LogInformation($"⚠️  儲存格 {cell.Address} 已合併 ({mergedRange})，浮動物件 '{floatingObj.Name}' 範圍: {GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}");
+                    //_logger.LogInformation($"⚠️  儲存格 {cell.Address} 已合併 ({mergedRange})，浮動物件 '{floatingObj.Name}' 範圍: {GetColumnName(fromCol)}{fromRow}:{GetColumnName(toCol)}{toRow}");
 
                     // 解析合併範圍
                     var rangeParts = mergedRange.Split(':');
@@ -491,7 +491,7 @@ namespace ExcelReaderAPI.Controllers
                         }
                         else
                         {
-                            _logger.LogInformation($"✅ 浮動物件 '{floatingObj.Name}' 完全在已存在的合併範圍內，合併文字內容");
+                            //_logger.LogInformation($"✅ 浮動物件 '{floatingObj.Name}' 完全在已存在的合併範圍內，合併文字內容");
                         }
                     }
 
@@ -504,7 +504,7 @@ namespace ExcelReaderAPI.Controllers
                     int rowSpan = toRow - fromRow + 1;
                     int colSpan = toCol - fromCol + 1;
 
-                    _logger.LogInformation($"浮動物件 '{floatingObj.Name}' (類型: {floatingObj.ObjectType}) 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
+                    //_logger.LogInformation($"浮動物件 '{floatingObj.Name}' (類型: {floatingObj.ObjectType}) 跨越 {rowSpan} 行 x {colSpan} 欄，自動設定合併儲存格");
 
                     SetCellMergedInfo(cellInfo, fromRow, fromCol, toRow, toCol);
                     MergeFloatingObjectText(cellInfo, floatingObj.Text, cell.Address);
@@ -1188,7 +1188,7 @@ namespace ExcelReaderAPI.Controllers
                         // 單一儲存格 - 使用 EPPlus 8.x Picture API
                         if (cell.Picture.Exists)
                         {
-                            _logger.LogInformation($"✅ 儲存格 {cell.Address} 包含 In-Cell 圖片 (EPPlus 8.x API)");
+                            //_logger.LogInformation($"✅ 儲存格 {cell.Address} 包含 In-Cell 圖片 (EPPlus 8.x API)");
 
                             var cellPicture = cell.Picture.Get();
                             if (cellPicture != null)
@@ -1239,7 +1239,7 @@ namespace ExcelReaderAPI.Controllers
                                 };
 
                                 images.Add(imageInfo);
-                                _logger.LogInformation($"成功讀取 In-Cell 圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes, 尺寸: {cellWidthPixels:F0}×{totalHeightPixels:F0}px");
+                                //_logger.LogInformation($"成功讀取 In-Cell 圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes, 尺寸: {cellWidthPixels:F0}×{totalHeightPixels:F0}px");
                                 return images.Any() ? images : null;
                             }
                         }
@@ -1260,7 +1260,7 @@ namespace ExcelReaderAPI.Controllers
                     return null;
                 }
 
-                _logger.LogInformation($"儲存格 {cell.Address} 找到 {pictures.Count} 張圖片 (來自索引)");
+                //_logger.LogInformation($"儲存格 {cell.Address} 找到 {pictures.Count} 張圖片 (來自索引)");
 
                 // 處理找到的圖片
                 foreach (var picture in pictures)
@@ -1287,7 +1287,7 @@ namespace ExcelReaderAPI.Controllers
                             toCol = fromCol;
                         }
 
-                        _logger.LogInformation($"處理圖片: '{picture.Name ?? "未命名"}' 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
+                        //_logger.LogInformation($"處理圖片: '{picture.Name ?? "未命名"}' 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
 
                         // 獲取圖片原始尺寸
                         var (actualWidth, actualHeight) = GetActualImageDimensions(picture);
@@ -1394,7 +1394,7 @@ namespace ExcelReaderAPI.Controllers
                         };
 
                         images.Add(imageInfo);
-                        _logger.LogInformation($"成功解析圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes");
+                        //_logger.LogInformation($"成功解析圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes");
                     }
                     catch (Exception imgEx)
                     {
@@ -1480,7 +1480,7 @@ namespace ExcelReaderAPI.Controllers
                                     toCol = fromCol;
                                 }
 
-                                _logger.LogInformation($"發現圖片: '{picture.Name ?? "未命名"}' 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
+                                //_logger.LogInformation($"發現圖片: '{picture.Name ?? "未命名"}' 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
 
                                 // 只在圖片的起始儲存格（From位置）添加圖片
                                 // 避免同一張圖片被重複添加到多個儲存格，造成資料量過大
@@ -1632,7 +1632,7 @@ namespace ExcelReaderAPI.Controllers
                                         };
 
                                         images.Add(imageInfo);
-                                        _logger.LogInformation($"成功解析圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes");
+                                        //_logger.LogInformation($"成功解析圖片: {imageInfo.Name}, 大小: {imageInfo.FileSize} bytes");
                                     }
                                     catch (Exception imgEx)
                                     {
@@ -1739,7 +1739,7 @@ namespace ExcelReaderAPI.Controllers
                                 toCol = fromCol;
                             }
 
-                            _logger.LogInformation($"發現浮動物件: '{drawing.Name ?? "未命名"}' 類型: {drawing.GetType().Name} 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
+                            //_logger.LogInformation($"發現浮動物件: '{drawing.Name ?? "未命名"}' 類型: {drawing.GetType().Name} 位置: Row {fromRow}-{toRow}, Col {fromCol}-{toCol}");
 
                             // ⭐ 新邏輯: 解決合併儲存格與浮動物件範圍不一致的問題
                             // 檢查浮動物件是否與儲存格範圍有交集
@@ -1779,10 +1779,10 @@ namespace ExcelReaderAPI.Controllers
                             bool shouldInclude = hasOverlap && isAnchorCell;
 
                             // 記錄詳細的檢查結果
-                            _logger.LogDebug($"浮動物件 '{drawing.Name ?? "未命名"}' 位置檢查: " +
-                                           $"浮動物件範圍: Row {fromRow}-{toRow}, Col {fromCol}-{toCol} | " +
-                                           $"儲存格範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol} | " +
-                                           $"有交集: {hasOverlap} | 是錨點儲存格: {isAnchorCell} | 結果: {shouldInclude}");
+                            // _logger.LogDebug($"浮動物件 '{drawing.Name ?? "未命名"}' 位置檢查: " +
+                            //                $"浮動物件範圍: Row {fromRow}-{toRow}, Col {fromCol}-{toCol} | " +
+                            //                $"儲存格範圍: Row {cellStartRow}-{cellEndRow}, Col {cellStartCol}-{cellEndCol} | " +
+                            //                $"有交集: {hasOverlap} | 是錨點儲存格: {isAnchorCell} | 結果: {shouldInclude}");
 
                             if (shouldInclude)
                             {
@@ -1822,7 +1822,7 @@ namespace ExcelReaderAPI.Controllers
                                     };
 
                                     floatingObjects.Add(floatingObjectInfo);
-                                    _logger.LogInformation($"✅ 成功解析浮動物件: {floatingObjectInfo.Name}, 類型: {floatingObjectInfo.ObjectType}");
+                                    //_logger.LogInformation($"✅ 成功解析浮動物件: {floatingObjectInfo.Name}, 類型: {floatingObjectInfo.ObjectType}");
                                 }
                                 catch (Exception objEx)
                                 {
@@ -2350,7 +2350,7 @@ namespace ExcelReaderAPI.Controllers
                     // EMF 檔頭: 檢查 EMF 格式 (會自動轉換為 PNG)
                     if (IsEmfFormat(bytes))
                     {
-                        _logger.LogInformation($"圖片 {picture.Name} 是 EMF 格式，將自動轉換為 PNG 格式");
+                        //_logger.LogInformation($"圖片 {picture.Name} 是 EMF 格式，將自動轉換為 PNG 格式");
                         return "PNG"; // 因為會自動轉換，所以返回 PNG 類型
                     }
                 }
@@ -2400,14 +2400,14 @@ namespace ExcelReaderAPI.Controllers
                     // 檢查是否為 EMF 格式 (Enhanced Metafile)
                     if (IsEmfFormat(imageBytes))
                     {
-                        _logger.LogInformation($"🔄 檢測到 EMF 格式圖片: {picture.Name}，正在轉換為 PNG 格式...");
+                        //_logger.LogInformation($"🔄 檢測到 EMF 格式圖片: {picture.Name}，正在轉換為 PNG 格式...");
                         
                         // 嘗試轉換 EMF 到 PNG
                         var pngBytes = ConvertEmfToPng(imageBytes);
                         
                         if (pngBytes != null && pngBytes.Length > 0)
                         {
-                            _logger.LogInformation($"✅ EMF 轉 PNG 成功: {picture.Name} ({imageBytes.Length} -> {pngBytes.Length} bytes)");
+                            //_logger.LogInformation($"✅ EMF 轉 PNG 成功: {picture.Name} ({imageBytes.Length} -> {pngBytes.Length} bytes)");
                             return Convert.ToBase64String(pngBytes);
                         }
                         else
@@ -2488,7 +2488,7 @@ namespace ExcelReaderAPI.Controllers
         {
             try
             {
-                _logger.LogInformation($"開始轉換 EMF 到 PNG，原始大小: {emfBytes.Length} bytes，目標尺寸: {width}x{height}px");
+                //_logger.LogInformation($"開始轉換 EMF 到 PNG，原始大小: {emfBytes.Length} bytes，目標尺寸: {width}x{height}px");
 
                 // 檢查平台支援
                 var isWindows = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
@@ -2498,7 +2498,7 @@ namespace ExcelReaderAPI.Controllers
                 {
                     try
                     {
-                        _logger.LogInformation("嘗試使用 System.Drawing 進行 EMF 轉換...");
+                        //_logger.LogInformation("嘗試使用 System.Drawing 進行 EMF 轉換...");
                         
                         using var emfStream = new MemoryStream(emfBytes);
                         using var emfImage = Image.FromStream(emfStream);
@@ -2507,7 +2507,7 @@ namespace ExcelReaderAPI.Controllers
                         var emfWidth = emfImage.Width;
                         var emfHeight = emfImage.Height;
                         
-                        _logger.LogInformation($"EMF 原始尺寸: {emfWidth}x{emfHeight}px");
+                        //_logger.LogInformation($"EMF 原始尺寸: {emfWidth}x{emfHeight}px");
                         
                         // 如果沒有指定目標尺寸，使用EMF的原始尺寸
                         var targetWidth = width > 0 ? width : emfWidth;
@@ -2535,7 +2535,7 @@ namespace ExcelReaderAPI.Controllers
                         pngBitmap.Save(pngStream, ImageFormat.Png);
                         var pngBytes = pngStream.ToArray();
                         
-                        _logger.LogInformation($"✅ System.Drawing EMF轉換成功: {emfBytes.Length} -> {pngBytes.Length} bytes, 尺寸: {targetWidth}x{targetHeight}px");
+                        //_logger.LogInformation($"✅ System.Drawing EMF轉換成功: {emfBytes.Length} -> {pngBytes.Length} bytes, 尺寸: {targetWidth}x{targetHeight}px");
                         return pngBytes;
                     }
                     catch (Exception systemDrawingEx)
@@ -2546,11 +2546,11 @@ namespace ExcelReaderAPI.Controllers
                 }
                 else
                 {
-                    _logger.LogInformation("非 Windows 平台，EMF格式無法直接轉換，使用提示圖片");
+                    //_logger.LogInformation("非 Windows 平台，EMF格式無法直接轉換，使用提示圖片");
                 }
 
                 // 方法2: 跨平台使用 SkiaSharp 創建提示圖片
-                _logger.LogInformation("使用 SkiaSharp 創建 EMF 格式提示圖片");
+                //_logger.LogInformation("使用 SkiaSharp 創建 EMF 格式提示圖片");
                 return CreateEmfPlaceholderPng(width, height, $"EMF 檔案 ({emfBytes.Length} bytes)");
             }
             catch (Exception ex)
@@ -2682,7 +2682,7 @@ namespace ExcelReaderAPI.Controllers
         {
             try
             {
-                _logger.LogInformation($"開始查找嵌入圖片，ID: {imageId}");
+                //_logger.LogInformation($"開始查找嵌入圖片，ID: {imageId}");
 
                 // 方法 1: 遍歷所有工作表的所有繪圖物件
                 foreach (var worksheet in workbook.Worksheets)
@@ -2703,7 +2703,7 @@ namespace ExcelReaderAPI.Controllers
                                      picture.Name == imageId ||
                                      imageId.Contains(picture.Name)))
                                 {
-                                    _logger.LogInformation($"找到匹配的圖片: {picture.Name}");
+                                    //_logger.LogInformation($"找到匹配的圖片: {picture.Name}");
                                     return new ImageInfo
                                     {
                                         Name = picture.Name,
@@ -2733,7 +2733,7 @@ namespace ExcelReaderAPI.Controllers
                 var foundImage = TryAdvancedImageSearch(workbook, imageId);
                 if (foundImage != null)
                 {
-                    _logger.LogInformation($"通過進階搜索找到圖片: {imageId}");
+                    //_logger.LogInformation($"通過進階搜索找到圖片: {imageId}");
                     return foundImage;
                 }
 
@@ -2755,7 +2755,7 @@ namespace ExcelReaderAPI.Controllers
         {
             try
             {
-                _logger.LogInformation($"使用 EPPlus 7.1.0 進階功能查找圖片，ID: {imageId}");
+                //_logger.LogInformation($"使用 EPPlus 7.1.0 進階功能查找圖片，ID: {imageId}");
 
                 // 方法 1: 直接解析 OOXML 包結構 (新增)
                 // var ooxmlImage = TryDirectOoxmlImageSearch(workbook, imageId);
@@ -2861,7 +2861,7 @@ namespace ExcelReaderAPI.Controllers
                                 // 檢查圖片的所有可能屬性
                                 if (CheckAllPictureProperties(picture, cleanImageId, imageId))
                                 {
-                                    _logger.LogInformation($"通過擴展屬性檢查找到匹配圖片: {picture.Name}");
+                                    //_logger.LogInformation($"通過擴展屬性檢查找到匹配圖片: {picture.Name}");
 
                                     return CreateImageInfoFromPicture(picture, imageId);
                                 }
@@ -3021,7 +3021,7 @@ namespace ExcelReaderAPI.Controllers
                                     cleanImageId.Contains(pictureName) ||
                                     IsPartialIdMatch(cleanImageId, pictureName))
                                 {
-                                    _logger.LogInformation($"透過詳細搜索找到可能匹配的圖片: Name='{picture.Name}', Description='{picture.Description}'");
+                                    //_logger.LogInformation($"透過詳細搜索找到可能匹配的圖片: Name='{picture.Name}', Description='{picture.Description}'");
 
                                     return new ImageInfo
                                     {
@@ -3088,7 +3088,7 @@ namespace ExcelReaderAPI.Controllers
         {
             try
             {
-                _logger.LogInformation("=================== Excel 文件診斷報告 ===================");
+                //_logger.LogInformation("=================== Excel 文件診斷報告 ===================");
 
                 // 統計總體資訊
                 int totalDrawings = 0;
@@ -3096,12 +3096,12 @@ namespace ExcelReaderAPI.Controllers
 
                 foreach (var worksheet in workbook.Worksheets)
                 {
-                    _logger.LogInformation($"📊 工作表分析: '{worksheet.Name}'");
+                    //_logger.LogInformation($"📊 工作表分析: '{worksheet.Name}'");
 
                     if (worksheet.Drawings != null && worksheet.Drawings.Any())
                     {
                         totalDrawings += worksheet.Drawings.Count;
-                        _logger.LogInformation($"  🎨 繪圖物件數量: {worksheet.Drawings.Count}");
+                        //_logger.LogInformation($"  🎨 繪圖物件數量: {worksheet.Drawings.Count}");
 
                         for (int i = 0; i < worksheet.Drawings.Count; i++)
                         {
@@ -3109,18 +3109,18 @@ namespace ExcelReaderAPI.Controllers
                             if (drawing is OfficeOpenXml.Drawing.ExcelPicture picture)
                             {
                                 totalPictures++;
-                                _logger.LogInformation($"  📷 圖片 #{i + 1}:");
-                                _logger.LogInformation($"    - Name: '{picture.Name ?? "未命名"}'");
-                                _logger.LogInformation($"    - Description: '{picture.Description ?? "無描述"}'");
-                                _logger.LogInformation($"    - Position: Row {picture.From.Row + 1}, Col {picture.From.Column + 1}");
-                                _logger.LogInformation($"    - Size: {picture.Image?.Bounds.Width ?? 0} x {picture.Image?.Bounds.Height ?? 0}");
+                                //_logger.LogInformation($"  📷 圖片 #{i + 1}:");
+                                //_logger.LogInformation($"    - Name: '{picture.Name ?? "未命名"}'");
+                                //_logger.LogInformation($"    - Description: '{picture.Description ?? "無描述"}'");
+                                //_logger.LogInformation($"    - Position: Row {picture.From.Row + 1}, Col {picture.From.Column + 1}");
+                                //_logger.LogInformation($"    - Size: {picture.Image?.Bounds.Width ?? 0} x {picture.Image?.Bounds.Height ?? 0}");
 
                                 // 嘗試獲取更多屬性
                                 try
                                 {
                                     var imageData = ConvertImageToBase64(picture);
                                     var dataSize = string.IsNullOrEmpty(imageData) ? 0 : imageData.Length;
-                                    _logger.LogInformation($"    - Base64 資料長度: {dataSize} 字符");
+                                    //_logger.LogInformation($"    - Base64 資料長度: {dataSize} 字符");
                                 }
                                 catch (Exception ex)
                                 {
@@ -3129,26 +3129,26 @@ namespace ExcelReaderAPI.Controllers
                             }
                             else
                             {
-                                _logger.LogInformation($"  🔧 其他繪圖物件 #{i + 1}:");
-                                _logger.LogInformation($"    - Type: {drawing.GetType().Name}");
-                                _logger.LogInformation($"    - Name: '{drawing.Name ?? "未命名"}'");
+                                //_logger.LogInformation($"  🔧 其他繪圖物件 #{i + 1}:");
+                                //_logger.LogInformation($"    - Type: {drawing.GetType().Name}");
+                                //_logger.LogInformation($"    - Name: '{drawing.Name ?? "未命名"}'");
                             }
                         }
                     }
                     else
                     {
-                        _logger.LogInformation($"  ❌ 無繪圖物件");
+                        //_logger.LogInformation($"  ❌ 無繪圖物件");
                     }
 
 
                 }
 
                 // 總體統計
-                _logger.LogInformation($"=================== 總體統計 ===================");
-                _logger.LogInformation($"📈 總工作表數: {workbook.Worksheets.Count}");
-                _logger.LogInformation($"📈 總繪圖物件數: {totalDrawings}");
-                _logger.LogInformation($"📈 總圖片數: {totalPictures}");
-                _logger.LogInformation($"=================== 診斷完成 ===================");
+                //_logger.LogInformation($"=================== 總體統計 ===================");
+                //_logger.LogInformation($"📈 總工作表數: {workbook.Worksheets.Count}");
+                //_logger.LogInformation($"📈 總繪圖物件數: {totalDrawings}");
+                //_logger.LogInformation($"📈 總圖片數: {totalPictures}");
+                //_logger.LogInformation($"=================== 診斷完成 ===================");
             }
             catch (Exception ex)
             {
@@ -3690,7 +3690,7 @@ namespace ExcelReaderAPI.Controllers
         [HttpPost("upload")]
         public async Task<ActionResult<UploadResponse>> UploadExcel(IFormFile file)
         {
-            _logger.LogInformation($"開始處理檔案上傳: {file?.FileName ?? "null"}, 大小: {file?.Length ?? 0} bytes");
+            //_logger.LogInformation($"開始處理檔案上傳: {file?.FileName ?? "null"}, 大小: {file?.Length ?? 0} bytes");
 
             try
             {
@@ -3760,7 +3760,7 @@ namespace ExcelReaderAPI.Controllers
                             _logger.LogDebug($"圖片 '{picture.Name}' 擴展範圍到: Row {picToRow}, Col {picToCol}");
                         }
                     }
-                    _logger.LogInformation($"包含圖片後的範圍: {rowCount} 行 x {colCount} 欄");
+                    //_logger.LogInformation($"包含圖片後的範圍: {rowCount} 行 x {colCount} 欄");
                 }
 
                 excelData.TotalRows = rowCount;
@@ -3778,8 +3778,8 @@ namespace ExcelReaderAPI.Controllers
                 var mergedCellIndex = new MergedCellIndex(worksheet);
                 cacheStopwatch.Stop();
 
-                _logger.LogInformation($"⚡ 索引建立完成 - 圖片: {imageIndex.TotalImageCount} 張 ({imageIndexStopwatch.ElapsedMilliseconds}ms), " +
-                    $"合併儲存格: {mergedCellIndex.MergeCount} 個 ({cacheStopwatch.ElapsedMilliseconds}ms)");
+                // _logger.LogInformation($"⚡ 索引建立完成 - 圖片: {imageIndex.TotalImageCount} 張 ({imageIndexStopwatch.ElapsedMilliseconds}ms), " +
+                //     $"合併儲存格: {mergedCellIndex.MergeCount} 個 ({cacheStopwatch.ElapsedMilliseconds}ms)");
 
                 // 生成 Excel 欄位標頭 (A, B, C, D...) 包含寬度資訊
                 var columnHeaders = new List<object>();
@@ -3876,7 +3876,7 @@ namespace ExcelReaderAPI.Controllers
         {
             try
             {
-                _logger.LogInformation("開始測試智慧內容檢測功能");
+                //_logger.LogInformation("開始測試智慧內容檢測功能");
 
                 // 使用現有的 Excel 檔案進行測試
                 var testFilePath = Path.Combine("d:", "VUE_EPPLUS", "有圖片的excel.xlsx");
@@ -3898,7 +3898,7 @@ namespace ExcelReaderAPI.Controllers
                 var cellA1 = worksheet.Cells["A1"];
                 var contentType = DetectCellContentType(cellA1, worksheet);
 
-                _logger.LogInformation($"A1 儲存格內容類型檢測結果: {contentType}");
+                //_logger.LogInformation($"A1 儲存格內容類型檢測結果: {contentType}");
 
                 var cellInfo = CreateCellInfo(cellA1, worksheet);
 
