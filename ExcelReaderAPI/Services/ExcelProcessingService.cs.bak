@@ -1,0 +1,214 @@
+using ExcelReaderAPI.Models;
+using ExcelReaderAPI.Models.Caches;
+using ExcelReaderAPI.Models.Enums;
+using ExcelReaderAPI.Services.Interfaces;
+using Microsoft.Extensions.Logging;
+using OfficeOpenXml;
+
+namespace ExcelReaderAPI.Services
+{
+    /// <summary>
+    /// Excel 處理服務 - 核心儲存格和工作表處理邏輯
+    /// Phase 2.1: 從 ExcelController 搬移 10 個方法,保持邏輯完全不變
+    /// </summary>
+    public class ExcelProcessingService : IExcelProcessingService
+    {
+        private readonly IExcelImageService _imageService;
+        private readonly IExcelCellService _cellService;
+        private readonly IExcelColorService _colorService;
+        private readonly ILogger<ExcelProcessingService> _logger;
+
+        public ExcelProcessingService(
+            IExcelImageService imageService,
+            IExcelCellService cellService,
+            IExcelColorService colorService,
+            ILogger<ExcelProcessingService> logger)
+        {
+            _imageService = imageService ?? throw new ArgumentNullException(nameof(imageService));
+            _cellService = cellService ?? throw new ArgumentNullException(nameof(cellService));
+            _colorService = colorService ?? throw new ArgumentNullException(nameof(colorService));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        }
+
+        #region CreateCellInfo Methods
+
+        /// <summary>
+        /// 創建儲存格資訊 (使用快取優化版本)
+        /// 從 ExcelController.CreateCellInfo 搬移,保持邏輯完全不變
+        /// </summary>
+        public ExcelCellInfo CreateCellInfo(
+            ExcelRange cell,
+            ExcelWorksheet worksheet,
+            WorksheetImageIndex? imageIndex,
+            ColorCache colorCache,
+            MergedCellIndex mergedCellIndex)
+        {
+            // TODO: Phase 2 - 從 ExcelController 複製完整方法邏輯
+            // 此方法約 370 行,需要完整保留所有邏輯
+            throw new NotImplementedException("Phase 2: 待從 ExcelController 搬移完整實作");
+        }
+
+        /// <summary>
+        /// 創建儲存格資訊 (簡化版,不使用快取)
+        /// 從 ExcelController.CreateCellInfo 搬移
+        /// </summary>
+        public ExcelCellInfo CreateCellInfo(ExcelRange cell, ExcelWorksheet worksheet)
+        {
+            // TODO: Phase 2 - 從 ExcelController 複製完整方法邏輯
+            // 此方法約 6 行,委派給快取版本
+            throw new NotImplementedException("Phase 2: 待從 ExcelController 搬移完整實作");
+        }
+
+        #endregion
+
+        #region DetectCellContentType Methods
+
+        /// <summary>
+        /// 偵測儲存格內容類型 (使用索引優化)
+        /// 從 ExcelController.DetectCellContentType 搬移
+        /// </summary>
+        public CellContentType DetectCellContentType(ExcelRange cell, WorksheetImageIndex? imageIndex)
+        {
+            try
+            {
+                // 檢查是否有文字內容
+                var hasText = !string.IsNullOrEmpty(cell.Text) || !string.IsNullOrEmpty(cell.Formula);
+
+                // ⭐ EPPlus 8.x: 優先檢查 In-Cell 圖片
+                bool hasInCellPicture = false;
+                try
+                {
+                    // 只有單一儲存格才能檢查 In-Cell Picture
+                    hasInCellPicture = cell.Picture.Exists;
+                }
+                catch
+                {
+                    // 忽略 Picture API 錯誤
+                }
+
+                // 使用索引快速檢查是否有浮動圖片 (Drawing Pictures) - O(1) 複雜度
+                var hasDrawingImages = imageIndex?.HasImagesAtCell(cell.Start.Row, cell.Start.Column) ?? false;
+
+                // 合併判斷：In-Cell 圖片或浮動圖片
+                var hasImages = hasInCellPicture || hasDrawingImages;
+
+                // 判斷內容類型
+                if (!hasText && !hasImages)
+                    return CellContentType.Empty;
+                else if (hasText && !hasImages)
+                    return CellContentType.TextOnly;
+                else if (!hasText && hasImages)
+                    return CellContentType.ImageOnly;
+                else
+                    return CellContentType.Mixed;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug($"檢測儲存格 {cell.Address} 內容類型時發生錯誤: {ex.Message}");
+                return CellContentType.Mixed; // 預設為混合類型以確保完整處理
+            }
+        }
+
+        /// <summary>
+        /// 偵測儲存格內容類型 (不使用索引)
+        /// 從 ExcelController.DetectCellContentType 搬移
+        /// </summary>
+        public CellContentType DetectCellContentType(ExcelRange cell, ExcelWorksheet worksheet)
+        {
+            // TODO: Phase 2 - 從 ExcelController 複製完整方法邏輯
+            // 此方法約 71 行
+            throw new NotImplementedException("Phase 2: 待從 ExcelController 搬移完整實作");
+        }
+
+        #endregion
+
+        #region Data and Default Methods
+
+        /// <summary>
+        /// 取得原始儲存格資料陣列
+        /// 從 ExcelController.GetRawCellData 搬移
+        /// </summary>
+        public object[,] GetRawCellData(ExcelWorksheet worksheet, int maxRows, int maxCols)
+        {
+            // TODO: Phase 2 - 從 ExcelController 複製完整方法邏輯
+            // 此方法約 135 行
+            throw new NotImplementedException("Phase 2: 待從 ExcelController 搬移完整實作");
+        }
+
+        /// <summary>
+        /// 創建預設字型資訊
+        /// 從 ExcelController.CreateDefaultFontInfo 搬移
+        /// </summary>
+        public FontInfo CreateDefaultFontInfo()
+        {
+            // TODO: Phase 2 - 從 ExcelController 複製完整方法邏輯
+            // 此方法約 16 行
+            throw new NotImplementedException("Phase 2: 待從 ExcelController 搬移完整實作");
+        }
+
+        /// <summary>
+        /// 創建預設對齊資訊
+        /// 從 ExcelController.CreateDefaultAlignmentInfo 搬移
+        /// </summary>
+        public AlignmentInfo CreateDefaultAlignmentInfo()
+        {
+            // TODO: Phase 2 - 從 ExcelController 複製完整方法邏輯
+            // 此方法約 12 行
+            throw new NotImplementedException("Phase 2: 待從 ExcelController 搬移完整實作");
+        }
+
+        /// <summary>
+        /// 創建預設邊框資訊
+        /// 從 ExcelController.CreateDefaultBorderInfo 搬移
+        /// </summary>
+        public BorderInfo CreateDefaultBorderInfo()
+        {
+            // TODO: Phase 2 - 從 ExcelController 複製完整方法邏輯
+            // 此方法約 13 行
+            throw new NotImplementedException("Phase 2: 待從 ExcelController 搬移完整實作");
+        }
+
+        /// <summary>
+        /// 創建預設填充資訊
+        /// 從 ExcelController.CreateDefaultFillInfo 搬移
+        /// </summary>
+        public FillInfo CreateDefaultFillInfo()
+        {
+            // TODO: Phase 2 - 從 ExcelController 複製完整方法邏輯
+            // 此方法約 11 行
+            throw new NotImplementedException("Phase 2: 待從 ExcelController 搬移完整實作");
+        }
+
+        /// <summary>
+        /// 安全取得儲存格值
+        /// 從 ExcelController.GetSafeValue 搬移
+        /// </summary>
+        public string? GetSafeValue(ExcelRange cell)
+        {
+            // TODO: Phase 2 - 從 ExcelController 複製完整方法邏輯
+            // 此方法約 44 行
+            throw new NotImplementedException("Phase 2: 待從 ExcelController 搬移完整實作");
+        }
+
+        #endregion
+
+        #region Helper Methods (Private)
+
+        /// <summary>
+        /// 取得欄名稱 (Excel 字母格式)
+        /// </summary>
+        private string GetColumnName(int column)
+        {
+            string columnName = "";
+            while (column > 0)
+            {
+                int modulo = (column - 1) % 26;
+                columnName = Convert.ToChar('A' + modulo) + columnName;
+                column = (column - modulo) / 26;
+            }
+            return columnName;
+        }
+
+        #endregion
+    }
+}
